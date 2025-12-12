@@ -1,0 +1,1143 @@
+{
+  "project_context": {
+    "brief": "做一个运行在 Windows 本地（localhost）的个人媒体库 WebUI，用户指定 MediaRoot 后在浏览器内分类浏览与安全整理本地资源，并以同页 Overlay 方式查看图片/播放视频。",
+    "mvp_goal": "一键启动的本地 WebUI，可在 MediaRoot 内快速浏览图片/散图/视频并安全删除或移动。",
+    "non_goals": [
+      "云端同步/上传/分享或多用户远程访问",
+      "AI 内容分析（人脸/自动标签）",
+      "Games 复杂管理与运行",
+      "专门的移动端 App"
+    ]
+  },
+  "md_source": "read_only.md",
+  "generated_at": "2025-12-12T12:46:36Z",
+  "tasks": [
+    {
+      "id": "T-20251212-act-012-clarify-rules",
+      "seed_id": "ACT-012",
+      "title": "澄清关键需求与验收口径（相册嵌套/软删除/不留黑边）",
+      "type": "design",
+      "summary": "DR 指出相册嵌套、软删除与“黑边”存在未决或冲突点，需先定口径避免返工。",
+      "acceptance_draft": [
+        "输出相册嵌套/层级展示规则（含 UI 示例）",
+        "确定软删除/回收站策略（MVP 默认开启、目录位置、恢复/清空规则）",
+        "定义“最大等比缩放、完整可见、不裁切/拉伸、不留黑边”在宽高比不一致时的可接受实现与验收示例",
+        "决策同步到产品说明与测试草案"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "done",
+      "dependencies": [],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 4,
+      "interfaces_touched": [
+        "product/spec"
+      ],
+      "artifacts": [
+        "decision notes",
+        "acceptance examples"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T11:46:33Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-012",
+        "decision",
+        "mvp"
+      ]
+    },
+    {
+      "id": "T-20251212-act-001-index-schema",
+      "seed_id": "ACT-001",
+      "title": "设计索引模型与分类规则",
+      "type": "design",
+      "summary": "所有视图、搜索与文件操作依赖稳定索引；需先定义 Album/Scattered/Videos/Games/Others 归类规则与数据模型，并落实 MediaRoot 沙箱边界。",
+      "acceptance_draft": [
+        "定义索引实体与字段（Folder/Album/ImageFile/VideoFile/OtherFile/OperationLog）",
+        "定义相册识别规则：相册为 MediaRoot 下“叶子图片文件夹”（含图片且不存在包含图片的子目录；父文件夹仅作为容器不重复计为相册；子目录仅含视频/游戏/其他不影响）",
+        "定义散图识别规则：MediaRoot 下所有不在任何 Album 路径内的图片归为散图（任意层级）",
+        "定义视频/游戏/其他文件扩展名映射与可扩展机制",
+        "明确路径全部为 MediaRoot 内相对路径"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "done",
+      "dependencies": [
+        "T-20251212-act-012-clarify-rules"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 3,
+      "interfaces_touched": [
+        "backend/indexing",
+        "product/spec"
+      ],
+      "artifacts": [
+        "backend/indexing/index-schema.md",
+        "product/spec/classification-rules.md",
+        "Compact/Compact-T-20251212-act-001-index-schema-2025-12-12-T110955Z.md"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T11:46:33Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-001",
+        "backend",
+        "mvp"
+      ]
+    },
+    {
+      "id": "T-20251212-act-001-scan-inventory",
+      "seed_id": "ACT-001",
+      "title": "实现 MediaRoot 目录扫描与安全沙箱",
+      "type": "build",
+      "summary": "实现对 MediaRoot 的递归扫描与越界保护，是后续分类、搜索和文件操作的基础。",
+      "acceptance_draft": [
+        "递归扫描 MediaRoot，产出文件/文件夹清单与元信息（相对路径、类型、大小、mtime）",
+        "默认跳过 MediaRoot/_trash/（回收站）目录，不将其内容纳入扫描结果",
+        "不跟随 symlink/junction 逃出 MediaRoot；发现越界即拒绝并记录",
+        "对异常文件名、权限不足、长路径等情况不崩溃并有可理解的日志"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-001-index-schema"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 6,
+      "interfaces_touched": [
+        "backend/scanner"
+      ],
+      "artifacts": [
+        "scanner module",
+        "raw inventory output"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T11:46:33Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-001",
+        "backend"
+      ]
+    },
+    {
+      "id": "T-20251212-act-001-classify-api",
+      "seed_id": "ACT-001",
+      "title": "实现媒体分类索引与查询 API",
+      "type": "build",
+      "summary": "基于扫描结果生成分类索引并提供查询 API，满足 Images/Scattered/Videos/Games/Others 视图数据来源。",
+      "acceptance_draft": [
+        "按规则归类：相册为叶子图片文件夹内图片；散图为不在任何 Album 路径内图片（任意层级）；视频/游戏/其他按扩展名归类",
+        "默认忽略 MediaRoot/_trash/ 回收站目录",
+        "提供相册列表 API（名称、相对路径、图片计数）",
+        "提供散图扁平列表 API",
+        "提供视频扁平列表 API",
+        "提供 Others/Games 列表或占位 API",
+        "所有返回路径均为 MediaRoot 内相对路径"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-001-scan-inventory",
+        "T-20251212-act-001-index-schema",
+        "T-20251212-act-012-clarify-rules"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 7,
+      "interfaces_touched": [
+        "backend/indexing",
+        "api/media"
+      ],
+      "artifacts": [
+        "/api/albums",
+        "/api/scattered",
+        "/api/videos",
+        "/api/others"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T11:46:33Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-001",
+        "backend",
+        "api"
+      ]
+    },
+    {
+      "id": "T-20251212-act-011-license-review",
+      "seed_id": "ACT-011",
+      "title": "梳理第三方依赖与许可证（含 FFmpeg）",
+      "type": "doc",
+      "summary": "提前锁定第三方依赖策略与许可证边界，避免分发时产生意外义务，并用于解锁 FFmpeg 集成。",
+      "acceptance_draft": [
+        "列出计划使用的主要依赖及许可证类型",
+        "给出 FFmpeg Windows 集成方式与分发注意事项结论",
+        "输出 LICENSE/NOTICE 草案"
+      ],
+      "lane": "next",
+      "priority_suggested": "P2",
+      "status": "todo",
+      "dependencies": [],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 4,
+      "interfaces_touched": [
+        "doc/licenses"
+      ],
+      "artifacts": [
+        "dependency license list",
+        "LICENSE",
+        "NOTICE"
+      ],
+      "citations": [
+        "EVID-002",
+        "EVID-006",
+        "EVID-009"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-011",
+        "compliance"
+      ]
+    },
+    {
+      "id": "T-20251212-act-007-fileops-api",
+      "seed_id": "ACT-007",
+      "title": "实现删除/移动后端 API（沙箱+确认+日志）",
+      "type": "build",
+      "summary": "删除/移动是高价值但高风险能力，必须强制 MediaRoot 沙箱、二次确认与操作日志。",
+      "acceptance_draft": [
+        "提供 delete/move API，参数为 MediaRoot 内相对路径",
+        "后端严格校验路径不越界",
+        "每次操作写入 OperationLog（时间、动作、源/目标、结果）",
+        "API 返回足够信息供前端二次确认展示"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-001-classify-api"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 7,
+      "interfaces_touched": [
+        "api/fileops",
+        "backend/security"
+      ],
+      "artifacts": [
+        "/api/delete",
+        "/api/move",
+        "operation log store"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-007",
+        "backend",
+        "security"
+      ]
+    },
+    {
+      "id": "T-20251212-act-002-image-thumbs",
+      "seed_id": "ACT-002",
+      "title": "实现图片缩略图生成与缓存",
+      "type": "build",
+      "summary": "为相册/散图列表提供高性能缩略图，避免前端直接加载原图导致卡顿。",
+      "acceptance_draft": [
+        "为图片生成固定尺寸缩略图（尺寸/质量可配置）",
+        "缩略图存储在缓存目录并按内容/mtime 命中复用",
+        "提供稳定 URL 供前端获取缩略图",
+        "批量生成支持后台队列或限速避免阻塞"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-001-classify-api"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 6,
+      "interfaces_touched": [
+        "backend/thumbnails",
+        "api/media"
+      ],
+      "artifacts": [
+        "thumbnail cache dir",
+        "/api/thumb?path=..."
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002",
+        "EVID-007"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-002",
+        "backend",
+        "perf"
+      ]
+    },
+    {
+      "id": "T-20251212-act-002-album-cover-mosaic",
+      "seed_id": "ACT-002",
+      "title": "生成相册 2×2 四宫格封面并随变更更新",
+      "type": "build",
+      "summary": "相册卡片封面需要随机 4 图拼接的四宫格缩略图，并具备缓存与失效机制。",
+      "acceptance_draft": [
+        "为每个相册随机/均匀选 4 张图拼 2×2 封面",
+        "封面生成后缓存复用",
+        "相册增删图片后封面可失效并重建"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-002-image-thumbs"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 4,
+      "interfaces_touched": [
+        "backend/thumbnails"
+      ],
+      "artifacts": [
+        "album cover generator",
+        "album cover cache"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-002",
+        "backend"
+      ]
+    },
+    {
+      "id": "T-20251212-act-003-ffmpeg-mosaic",
+      "seed_id": "ACT-003",
+      "title": "集成 FFmpeg 抽帧生成视频 2×2 预览缩略图",
+      "type": "build",
+      "summary": "视频列表需要直观预览，需依赖 FFmpeg 后端抽帧生成 4 帧拼图并缓存，同时对 FFmpeg 不可用给出指引。",
+      "acceptance_draft": [
+        "对视频抽取 4 帧并生成 2×2 拼图缩略图",
+        "缩略图缓存命中复用；视频更新时重建",
+        "FFmpeg 不可用时 API 返回明确错误与安装/配置指引"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-001-classify-api",
+        "T-20251212-act-011-license-review"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "FFmpeg（视频抽帧/缩略图生成）",
+          "type": "tool",
+          "status": "unknown",
+          "doc_url": "",
+          "note": "需确定 Windows 集成方式（随包分发 vs 用户自装）与许可证合规边界"
+        }
+      ],
+      "unblock_plan": "选定 FFmpeg 集成策略并完成许可证清单后再实现；运行时加入可用性检测与提示。",
+      "estimate_h": 6,
+      "interfaces_touched": [
+        "backend/video-thumbnails",
+        "api/media"
+      ],
+      "artifacts": [
+        "video mosaic generator",
+        "video cover cache"
+      ],
+      "citations": [
+        "EVID-002",
+        "EVID-008",
+        "EVID-009"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-003",
+        "backend",
+        "ffmpeg"
+      ]
+    },
+    {
+      "id": "T-20251212-act-004-spa-shell",
+      "seed_id": "ACT-004",
+      "title": "搭建 SPA 首页与 5 入口同页切换框架",
+      "type": "build",
+      "summary": "首页固定 5 入口卡片且同页切换视图是核心交互，需先完成 SPA 壳与响应式布局。",
+      "acceptance_draft": [
+        "首页显示 Images/Scattered/Videos/Games/Others 5 张入口卡片",
+        "点击入口在同一页面切换视图，不触发全页跳转",
+        "前进/后退/刷新保持当前视图与上下文",
+        "不同窗口尺寸下布局稳定且可用"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 6,
+      "interfaces_touched": [
+        "frontend/spa"
+      ],
+      "artifacts": [
+        "home grid",
+        "view switcher"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-004",
+        "frontend",
+        "mvp"
+      ]
+    },
+    {
+      "id": "T-20251212-act-004-category-views",
+      "seed_id": "ACT-004",
+      "title": "实现 Images/Scattered/Videos/Games/Others 视图列表",
+      "type": "build",
+      "summary": "在 SPA 中实现 5 类资源的具体列表/网格展示，并与后端索引 API 对接。",
+      "acceptance_draft": [
+        "Images 视图显示相册卡片列表（四宫格封面 + 名称）",
+        "Scattered 视图扁平显示散图缩略图列表",
+        "Videos 视图扁平显示视频卡片（有预览图则展示，无则占位）",
+        "Games 先占位或简单列表且不提供执行入口",
+        "Others 显示非媒体文件列表（名/类型/大小等基础信息）"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-004-spa-shell",
+        "T-20251212-act-001-classify-api",
+        "T-20251212-act-002-album-cover-mosaic",
+        "T-20251212-act-003-ffmpeg-mosaic"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 7,
+      "interfaces_touched": [
+        "frontend/views",
+        "api/media"
+      ],
+      "artifacts": [
+        "albums grid",
+        "scattered list",
+        "videos list",
+        "others list"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-004",
+        "frontend"
+      ]
+    },
+    {
+      "id": "T-20251212-act-005-image-overlay-ui",
+      "seed_id": "ACT-005",
+      "title": "实现图片 Overlay 查看器基础交互",
+      "type": "build",
+      "summary": "图片浏览需在同页 Overlay 打开并支持连续翻阅与关闭返回。",
+      "acceptance_draft": [
+        "点击相册封面或图片项弹出 Overlay",
+        "默认打开相册第一张图",
+        "支持按钮/键盘左右切换与关闭",
+        "关闭后回到原列表位置并保持上下文"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-004-category-views"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 5,
+      "interfaces_touched": [
+        "frontend/overlay"
+      ],
+      "artifacts": [
+        "image overlay component"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-005",
+        "frontend",
+        "overlay"
+      ]
+    },
+    {
+      "id": "T-20251212-act-005-image-scaling",
+      "seed_id": "ACT-005",
+      "title": "按决策实现图片等比缩放与“黑边”处理",
+      "type": "build",
+      "summary": "查看器内图片需保持宽高比并最大等比缩放，且“黑边”处理须符合澄清后的验收口径。",
+      "acceptance_draft": [
+        "图片保持宽高比，前景最大等比缩放至可用区域，不拉伸不裁切",
+        "前景始终完整可见（contain），尽可能占满网页",
+        "剩余区域用同一媒体做背景填充消除黑边，并提供不同宽高比示例验收"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-005-image-overlay-ui",
+        "T-20251212-act-012-clarify-rules"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 4,
+      "interfaces_touched": [
+        "frontend/overlay"
+      ],
+      "artifacts": [
+        "scaling layout rules"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-005",
+        "frontend"
+      ]
+    },
+    {
+      "id": "T-20251212-act-006-video-overlay-ui",
+      "seed_id": "ACT-006",
+      "title": "实现视频 Overlay 播放器基础功能",
+      "type": "build",
+      "summary": "视频需在同页 Overlay 内默认自动播放并提供基础控制。",
+      "acceptance_draft": [
+        "点击视频卡片弹出 Overlay 并自动播放",
+        "提供暂停/音量/进度拖动/全屏等基础控制",
+        "关闭 Overlay 后视频停止且资源释放正常"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-004-category-views"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 5,
+      "interfaces_touched": [
+        "frontend/overlay"
+      ],
+      "artifacts": [
+        "video overlay component"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-006",
+        "frontend",
+        "overlay"
+      ]
+    },
+    {
+      "id": "T-20251212-act-007-fileops-ui",
+      "seed_id": "ACT-007",
+      "title": "实现前端删除/移动交互与确认弹窗",
+      "type": "build",
+      "summary": "前端提供可理解的删除/移动入口与二次确认，确保安全操作体验。",
+      "acceptance_draft": [
+        "在列表项提供删除/移动按钮",
+        "操作前弹出二次确认并显示源/目标",
+        "操作后刷新列表与索引",
+        "失败/越界错误展示清晰提示"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-007-fileops-api",
+        "T-20251212-act-004-category-views"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 6,
+      "interfaces_touched": [
+        "frontend/views",
+        "frontend/dialogs"
+      ],
+      "artifacts": [
+        "confirm dialogs",
+        "fileops buttons"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-007",
+        "frontend",
+        "security"
+      ]
+    },
+    {
+      "id": "T-20251212-act-010-backend-config",
+      "seed_id": "ACT-010",
+      "title": "加入后端基础配置与端口冲突处理",
+      "type": "build",
+      "summary": "为一键启动体验提供 MediaRoot/端口配置与冲突处理能力。",
+      "acceptance_draft": [
+        "支持通过配置文件或启动参数指定 MediaRoot",
+        "默认端口可配置；占用时自动换端口或提示",
+        "启动后输出实际访问 URL"
+      ],
+      "lane": "now",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 4,
+      "interfaces_touched": [
+        "backend/config",
+        "backend/server"
+      ],
+      "artifacts": [
+        "config file",
+        "port selection logic"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-010",
+        "backend"
+      ]
+    },
+    {
+      "id": "T-20251212-act-010-bat-launcher",
+      "seed_id": "ACT-010",
+      "title": "实现 Windows .bat 一键启动并自动打开浏览器",
+      "type": "infra",
+      "summary": "满足双击 bat 启动本地服务并打开浏览器的核心使用方式。",
+      "acceptance_draft": [
+        "双击 .bat 可启动后端服务并自动打开默认浏览器",
+        "读取 MediaRoot/端口配置并传递给服务",
+        "启动失败或端口占用时提示清晰可理解"
+      ],
+      "lane": "now",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-010-backend-config"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 3,
+      "interfaces_touched": [
+        "infra/windows"
+      ],
+      "artifacts": [
+        "start.bat"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-010",
+        "windows",
+        "distribution"
+      ]
+    },
+    {
+      "id": "T-20251212-act-008-search-api",
+      "seed_id": "ACT-008",
+      "title": "实现基于索引的全局搜索 API",
+      "type": "build",
+      "summary": "提供按名称模糊匹配的全局搜索，提升大库定位效率。",
+      "acceptance_draft": [
+        "按关键字返回匹配的相册/文件结果",
+        "结果包含类型与定位信息（相册名/相对路径）",
+        "万级条目下响应时间记录在测试备注"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-001-classify-api"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 4,
+      "interfaces_touched": [
+        "api/search",
+        "backend/indexing"
+      ],
+      "artifacts": [
+        "/api/search"
+      ],
+      "citations": [
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-008",
+        "backend"
+      ]
+    },
+    {
+      "id": "T-20251212-act-008-search-ui",
+      "seed_id": "ACT-008",
+      "title": "实现前端搜索框与结果定位",
+      "type": "build",
+      "summary": "在 SPA 中加入全局搜索入口并支持点击定位到对应视图。",
+      "acceptance_draft": [
+        "全局搜索框可随时输入关键字",
+        "展示匹配结果并可点击跳转到对应视图/位置",
+        "清空搜索恢复原列表"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-004-spa-shell",
+        "T-20251212-act-008-search-api"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 5,
+      "interfaces_touched": [
+        "frontend/search"
+      ],
+      "artifacts": [
+        "search bar",
+        "search results panel"
+      ],
+      "citations": [
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-008",
+        "frontend"
+      ]
+    },
+    {
+      "id": "T-20251212-act-006-format-hints",
+      "seed_id": "ACT-006",
+      "title": "补齐视频格式支持检测与不支持提示策略",
+      "type": "build",
+      "summary": "浏览器编解码支持存在差异，需补齐不可播放检测与转码/外部打开提示策略。",
+      "acceptance_draft": [
+        "基于 canPlayType/探测策略判断不可播放格式",
+        "不可播放时展示明确提示（转码建议/外部播放器打开）",
+        "文档列出已验证的支持格式范围"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-006-video-overlay-ui"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-002",
+          "name": "浏览器音视频格式支持范围（HTML5 播放能力差异）",
+          "type": "policy",
+          "status": "unknown",
+          "doc_url": "",
+          "note": "部分封装/编码浏览器可能无法播放，需定义提示与外部打开方案"
+        }
+      ],
+      "unblock_plan": "先定义/验证支持格式清单，再实现检测与提示。",
+      "estimate_h": 4,
+      "interfaces_touched": [
+        "frontend/overlay",
+        "doc/formats"
+      ],
+      "artifacts": [
+        "unsupported-format UI",
+        "formats doc"
+      ],
+      "citations": [
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-006",
+        "frontend",
+        "formats"
+      ]
+    },
+    {
+      "id": "T-20251212-act-009-perf-spike",
+      "seed_id": "ACT-009",
+      "title": "执行缩略图/懒加载/大库性能 Spike 并出报告",
+      "type": "research",
+      "summary": "用可复现数据验证缩略图生成与前端懒加载/虚拟列表策略的实际性能，并确定参数。",
+      "acceptance_draft": [
+        "构建或获取万级媒体测试集并记录硬件基线",
+        "测量索引、缩略图生成、首屏与滚动性能",
+        "输出报告含耗时/资源占用/瓶颈与参数建议"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-002-image-thumbs",
+        "T-20251212-act-002-album-cover-mosaic",
+        "T-20251212-act-004-category-views",
+        "T-20251212-act-003-ffmpeg-mosaic"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-003",
+          "name": "大库测试集与目标硬件基准（用于 4K/高帧率播放与滚动性能验证）",
+          "type": "access",
+          "status": "unknown",
+          "doc_url": "",
+          "note": "缺少统一可复现测试集/硬件基线，需先构造并固化方法"
+        }
+      ],
+      "unblock_plan": "先按 DR 方案构造测试集并记录硬件参数，再执行压测。",
+      "estimate_h": 6,
+      "interfaces_touched": [
+        "perf/test",
+        "backend/thumbnails",
+        "frontend/views"
+      ],
+      "artifacts": [
+        "performance report"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002",
+        "EVID-007"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-009",
+        "perf",
+        "spike"
+      ]
+    },
+    {
+      "id": "T-20251212-act-007-soft-delete",
+      "seed_id": "ACT-007",
+      "title": "实现软删除/回收站（MVP 默认）",
+      "type": "build",
+      "summary": "MVP 默认开启软删除：删除即移动到回收站（MediaRoot/_trash/，自动创建；默认不参与索引/视图），文件保留 10 天后自动清理。",
+      "acceptance_draft": [
+        "删除操作默认执行软删除：文件移动到回收站目录",
+        "回收站目录固定为 MediaRoot/_trash/ 并自动创建",
+        "回收站目录内容默认不参与索引/正常视图展示",
+        "回收站内文件超过 10 天自动清理",
+        "提供恢复/清空回收站能力（API 或 UI）",
+        "软删除/恢复/清空均记录操作日志"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251212-act-007-fileops-api",
+        "T-20251212-act-012-clarify-rules"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 6,
+      "interfaces_touched": [
+        "api/fileops",
+        "backend/storage"
+      ],
+      "artifacts": [
+        "recycle bin folder",
+        "restore endpoints"
+      ],
+      "citations": [
+        "EVID-002"
+      ],
+      "created_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-12T11:46:33Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-007",
+        "backend"
+      ]
+    }
+  ],
+  "questions_for_human": [],
+  "answers_for_human": [
+    "不拉伸、不裁切，前景最大等比缩放（尽可能的占满整个网页），剩余区域用同一媒体做“背景填充”来消除黑边。",
+    "散图是 MediaRoot 下所有不在任何 Album 路径内的图片（任意层级；例如 MediaRoot/tmp/foo.jpg 也算散图）。",
+    "散图一键整理/归档：将散图移动到 MediaRoot/_unsorted/（目录不存在则自动创建，并记录操作日志）。",
+    "只有当一个文件夹直接含图片，且其子目录及后代不再包含图片时，它才被视为一个“相册”（叶子图片目录；父文件夹仅作容器不重复计为相册；子目录仅含视频/游戏/其他不影响）。",
+    "软删除/回收站：MVP 默认开启 + 10 天自动清理 + 回收站固定为 MediaRoot/_trash/ 并自动创建（默认不参与索引/视图展示）。"
+  ],
+  "assumptions": [
+    "目标浏览器为 Windows 上的 Edge/Chrome（Chromium），以其 HTML5 媒体支持作为基准。",
+    "MediaRoot 由用户显式配置，且不包含需要长期离线的网络盘路径。"
+  ],
+  "risks": [
+    {
+      "id": "R-20251212-ffmpeg-license",
+      "summary": "FFmpeg 的 Windows 集成与许可证边界不明确，可能影响分发策略或迫使用户自装。",
+      "severity": "high",
+      "mitigation": "先完成许可证梳理与集成策略决策（T-20251212-act-011-license-review），并在运行时检测 FFmpeg 可用性。",
+      "citations": [
+        "EVID-002",
+        "EVID-009"
+      ]
+    },
+    {
+      "id": "R-20251212-large-lib-perf",
+      "summary": "万级文件下索引/缩略图/前端列表可能卡顿，参数选择不当会影响体验。",
+      "severity": "mid",
+      "mitigation": "执行性能 Spike 并据报告调整缩略图尺寸、批处理并发和前端懒加载/虚拟列表策略（T-20251212-act-009-perf-spike）。",
+      "citations": [
+        "EVID-002",
+        "EVID-007"
+      ]
+    },
+    {
+      "id": "R-20251212-blackbar-ambiguity",
+      "summary": "黑边处理方案需正确落地（前景等比缩放完整可见 + 背景填充），否则影响观感与验收。",
+      "severity": "low",
+      "mitigation": "按 D-20251212-image-background-fill 实现并以不同宽高比样例验收。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ]
+    }
+  ],
+  "external_dependencies": [
+    {
+      "dep_id": "DEP-001",
+      "name": "FFmpeg（视频抽帧/缩略图生成）",
+      "type": "tool",
+      "status": "unknown",
+      "doc_url": "",
+      "note": "需确定 Windows 集成方式（随包分发 vs 用户自装）与许可证合规边界",
+      "citations": [
+        "EVID-002",
+        "EVID-009"
+      ]
+    },
+    {
+      "dep_id": "DEP-002",
+      "name": "浏览器音视频格式支持范围（HTML5 播放能力差异）",
+      "type": "policy",
+      "status": "unknown",
+      "doc_url": "",
+      "note": "部分封装/编码浏览器可能无法播放，需定义提示与外部打开方案",
+      "citations": [
+        "EVID-002"
+      ]
+    },
+    {
+      "dep_id": "DEP-003",
+      "name": "大库测试集与目标硬件基准（用于 4K/高帧率播放与滚动性能验证）",
+      "type": "access",
+      "status": "unknown",
+      "doc_url": "",
+      "note": "缺少统一可复现测试集/硬件基线",
+      "citations": [
+        "EVID-001",
+        "EVID-002",
+        "EVID-007"
+      ]
+    }
+  ],
+  "facts": [
+    "项目定位为 Windows 本地 WebUI（localhost），不上传云端。",
+    "所有扫描与操作均限定在用户指定的 MediaRoot 内。",
+    "回收站目录为 MediaRoot/_trash/，默认不参与索引/视图展示。",
+    "大库性能关键在缩略图预生成缓存与前端懒加载/虚拟列表。"
+  ],
+  "decisions": [
+    {
+      "id": "D-20251212-local-webui",
+      "summary": "产品定位为本地 WebUI，通过 .bat 一键启动并自动打开浏览器。",
+      "rationale": "符合用户使用场景与隐私/离线需求。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "date": "2025-12-12T00:00:00Z"
+    },
+    {
+      "id": "D-20251212-medaroot-sandbox",
+      "summary": "以 MediaRoot 作为唯一可扫描与可操作范围。",
+      "rationale": "降低误操作风险并简化权限边界。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "date": "2025-12-12T00:00:00Z"
+    },
+    {
+      "id": "D-20251212-spa-overlay",
+      "summary": "分类视图同页切换，媒体使用 Overlay 打开。",
+      "rationale": "满足“流畅不跳页”的核心交互。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "date": "2025-12-12T00:00:00Z"
+    },
+    {
+      "id": "D-20251212-image-background-fill",
+      "summary": "图片查看器不拉伸不裁切，前景最大等比缩放；剩余区域用同一媒体做背景填充以消除黑边。",
+      "rationale": "同时满足“完整可见”与“无黑边”的体验要求。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "date": "2025-12-12T00:00:00Z"
+    },
+    {
+      "id": "D-20251212-scattered-definition",
+      "summary": "散图定义为 MediaRoot 下所有不在任何 Album 路径内的图片（任意层级）。",
+      "rationale": "将跨层级的“非相册图片”统一汇聚到散图视图。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "date": "2025-12-12T00:00:00Z"
+    },
+    {
+      "id": "D-20251212-scattered-cleanup-target",
+      "summary": "散图一键整理/归档：将散图移动到 MediaRoot/_unsorted/ 目录。",
+      "rationale": "明确归档目标路径以便实现、测试与自动化对齐。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "date": "2025-12-12T00:00:00Z"
+    },
+    {
+      "id": "D-20251212-album-leaf-rule",
+      "summary": "相册为 MediaRoot 下的叶子图片文件夹：直接含图片且不存在包含图片的子目录；子目录仅含非图片媒体不影响；父文件夹仅作为容器。",
+      "rationale": "避免嵌套目录下相册重复计入并符合用户对层级的预期。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "date": "2025-12-12T00:00:00Z"
+    },
+    {
+      "id": "D-20251212-soft-delete-default",
+      "summary": "软删除/回收站作为 MVP 默认开启；回收站目录固定为 MediaRoot/_trash/ 并自动创建（默认不参与索引/视图展示）；文件在回收站保留 10 天后自动清理。",
+      "rationale": "在 MediaRoot 内实现回收站，保证沙箱不越界且可测试，同时降低误删风险并减少用户维护成本。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "date": "2025-12-12T00:00:00Z"
+    }
+  ]
+}
