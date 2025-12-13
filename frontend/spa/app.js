@@ -326,16 +326,17 @@ function createImageOverlay() {
     { class: "overlay__nav overlay__nav--prev", type: "button", "aria-label": "Previous (←)" },
     [el("span", { text: "←" }, [])],
   );
-  const nextBtn = el(
-    "button",
-    { class: "overlay__nav overlay__nav--next", type: "button", "aria-label": "Next (→)" },
-    [el("span", { text: "→" }, [])],
-  );
-  const stage = el("div", { class: "overlay__stage" }, []);
-  const status = el("div", { class: "overlay__status", text: "" }, []);
-  const img = el("img", { class: "overlay__img", alt: "" }, []);
-  stage.append(status, img);
-  viewer.append(prevBtn, stage, nextBtn);
+	  const nextBtn = el(
+	    "button",
+	    { class: "overlay__nav overlay__nav--next", type: "button", "aria-label": "Next (→)" },
+	    [el("span", { text: "→" }, [])],
+	  );
+	  const stage = el("div", { class: "overlay__stage" }, []);
+	  const bg = el("div", { class: "overlay__bg" }, []);
+	  const status = el("div", { class: "overlay__status", text: "" }, []);
+	  const img = el("img", { class: "overlay__img", alt: "" }, []);
+	  stage.append(bg, status, img);
+	  viewer.append(prevBtn, stage, nextBtn);
 
   panel.append(header, viewer);
   root.append(backdrop, panel);
@@ -370,31 +371,35 @@ function createImageOverlay() {
     document.body.style.paddingRight = savedBodyPaddingRight;
   }
 
-  function update() {
-    if (!isOpen) return;
-    const total = items.length;
-    const hasItems = total > 0;
-    prevBtn.disabled = !hasItems || index <= 0;
-    nextBtn.disabled = !hasItems || index >= total - 1;
+	  function update() {
+	    if (!isOpen) return;
+	    const total = items.length;
+	    const hasItems = total > 0;
+	    prevBtn.disabled = !hasItems || index <= 0;
+	    nextBtn.disabled = !hasItems || index >= total - 1;
+	    stage.classList.toggle("has-media", hasItems);
 
-    const currentRelPath = hasItems ? String(items[index] || "") : "";
-    const currentName = currentRelPath ? basename(currentRelPath) || currentRelPath : "";
-    title.textContent = contextTitle || currentName || "Image";
+	    const currentRelPath = hasItems ? String(items[index] || "") : "";
+	    const currentName = currentRelPath ? basename(currentRelPath) || currentRelPath : "";
+	    title.textContent = contextTitle || currentName || "Image";
 
-    if (hasItems) {
-      subtitle.textContent = `${currentName} · ${index + 1}/${total}`;
-      status.textContent = "Loading…";
-      img.classList.remove("is-loaded", "is-error");
-      img.alt = currentName || "image";
-      img.src = API.thumb(currentRelPath);
-      return;
-    }
+	    if (hasItems) {
+	      subtitle.textContent = `${currentName} · ${index + 1}/${total}`;
+	      status.textContent = "Loading…";
+	      img.classList.remove("is-loaded", "is-error");
+	      img.alt = currentName || "image";
+	      const src = API.thumb(currentRelPath);
+	      bg.style.backgroundImage = `url("${src}")`;
+	      img.src = src;
+	      return;
+	    }
 
-    subtitle.textContent = "";
-    img.removeAttribute("src");
-    img.alt = "";
-    status.textContent = message || "No image.";
-  }
+	    subtitle.textContent = "";
+	    bg.style.backgroundImage = "";
+	    img.removeAttribute("src");
+	    img.alt = "";
+	    status.textContent = message || "No image.";
+	  }
 
   function open({ relPaths, startIndex = 0, title: nextTitle = "", opener } = {}) {
     requestEpoch += 1;
@@ -416,19 +421,21 @@ function createImageOverlay() {
     closeBtn.focus({ preventScroll: true });
   }
 
-  function close({ restoreScroll = true, restoreFocus = true } = {}) {
-    if (!isOpen) return;
-    requestEpoch += 1;
-    isOpen = false;
-    items = [];
-    index = 0;
-    contextTitle = "";
-    message = "";
-    root.classList.remove("is-open");
-    root.setAttribute("aria-hidden", "true");
-    img.removeAttribute("src");
-    img.alt = "";
-    unlockBodyScroll();
+	  function close({ restoreScroll = true, restoreFocus = true } = {}) {
+	    if (!isOpen) return;
+	    requestEpoch += 1;
+	    isOpen = false;
+	    items = [];
+	    index = 0;
+	    contextTitle = "";
+	    message = "";
+	    root.classList.remove("is-open");
+	    root.setAttribute("aria-hidden", "true");
+	    stage.classList.remove("has-media");
+	    bg.style.backgroundImage = "";
+	    img.removeAttribute("src");
+	    img.alt = "";
+	    unlockBodyScroll();
 
     const focusTarget = openerEl;
     openerEl = null;
@@ -492,16 +499,18 @@ function createImageOverlay() {
   prevBtn.addEventListener("click", () => move(-1));
   nextBtn.addEventListener("click", () => move(1));
 
-  img.addEventListener("load", () => {
-    if (!isOpen) return;
-    img.classList.add("is-loaded");
-    status.textContent = "";
-  });
-  img.addEventListener("error", () => {
-    if (!isOpen) return;
-    img.classList.add("is-error");
-    status.textContent = "Failed to load.";
-  });
+	  img.addEventListener("load", () => {
+	    if (!isOpen) return;
+	    img.classList.add("is-loaded");
+	    status.textContent = "";
+	  });
+	  img.addEventListener("error", () => {
+	    if (!isOpen) return;
+	    img.classList.add("is-error");
+	    stage.classList.remove("has-media");
+	    bg.style.backgroundImage = "";
+	    status.textContent = "Failed to load.";
+	  });
 
   document.addEventListener("keydown", (event) => {
     if (!isOpen) return;
