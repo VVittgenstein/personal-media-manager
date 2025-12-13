@@ -156,7 +156,7 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251212-act-001-scan-inventory",
         "T-20251212-act-001-index-schema",
@@ -181,7 +181,7 @@
         "EVID-002"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T11:46:33Z",
+      "updated_at": "2025-12-13T02:39:51Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-001",
