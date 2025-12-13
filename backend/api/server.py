@@ -15,6 +15,7 @@ from backend.indexing.media_index import MediaIndex, build_media_index
 from backend.indexing.media_types import MediaTypes, load_media_types
 from backend.security.fileops import FileOpsError, FileOpsService
 from backend.security.operation_log import OperationLogStore
+from backend.thumbnails.album_covers import AlbumCoverError, AlbumCoverService
 from backend.thumbnails.image_thumbs import ThumbError, ThumbKeyMode, ThumbnailService, default_thumb_cache_dir
 
 logger = logging.getLogger(__name__)
@@ -57,8 +58,12 @@ class _MediaApiServer(ThreadingHTTPServer):
     index_cache: _IndexCache
     fileops: FileOpsService
     thumbs: ThumbnailService
+    album_covers: AlbumCoverService
 
     def server_close(self) -> None:
+        album_covers = getattr(self, "album_covers", None)
+        if album_covers is not None:
+            album_covers.close()
         thumbs = getattr(self, "thumbs", None)
         if thumbs is not None:
             thumbs.close()
@@ -229,6 +234,45 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/api/album-cover":
+            album_rel_path = query.get("path", [""])[0]
+            if not isinstance(album_rel_path, str) or not album_rel_path.strip():
+                self._send_error(400, "INVALID_REQUEST", "missing or invalid 'path' query parameter")
+                return
+
+            try:
+                result = self.server.album_covers.ensure_cover(album_rel_path)
+            except AlbumCoverError as exc:
+                self._send_error(exc.http_status, exc.code, exc.message)
+                return
+            except Exception as exc:
+                logger.exception("album cover failed: %s", exc)
+                self._send_error(500, "ALBUM_COVER_FAILED", str(exc))
+                return
+
+            if_none_match = self.headers.get("If-None-Match")
+            if if_none_match and if_none_match.strip('"') == result.etag and result.cache_path.exists():
+                self._send_bytes(
+                    304,
+                    body=b"",
+                    content_type=result.content_type,
+                    extra_headers={"ETag": f"\"{result.etag}\""},
+                    cache_control="public, max-age=0, must-revalidate",
+                )
+                return
+
+            headers: dict[str, str] = {"ETag": f"\"{result.etag}\""}
+            if result.source_mtime_ms is not None:
+                headers["Last-Modified"] = formatdate(result.source_mtime_ms / 1000, usegmt=True)
+            self._send_file(
+                200,
+                file_path=result.cache_path,
+                content_type=result.content_type,
+                extra_headers=headers,
+                cache_control="public, max-age=0, must-revalidate",
+            )
+            return
+
         self._send_error(404, "NOT_FOUND", f"unknown endpoint: {path}")
 
     def _read_json_body(self) -> dict[str, Any]:
@@ -337,6 +381,14 @@ def run_server(
         thumb_quality=thumb_quality,
         key_mode=thumb_key_mode,
         workers=thumb_workers,
+    )
+    server.album_covers = AlbumCoverService(
+        media_root=cache.media_root,
+        media_types=media_types,
+        cache_dir=Path(thumb_cache_dir) if thumb_cache_dir is not None else default_thumb_cache_dir(),
+        cover_size=thumb_size,
+        cover_quality=thumb_quality,
+        key_mode=thumb_key_mode,
     )
     logger.info("serving on http://%s:%s (MediaRoot=%s)", host, port, cache.media_root)
     server.serve_forever()

@@ -10,6 +10,7 @@ from backend.api.server import _Handler, _IndexCache, _MediaApiServer
 from backend.indexing.media_types import MediaTypes
 from backend.security.fileops import FileOpsService
 from backend.security.operation_log import OperationLogStore
+from backend.thumbnails.album_covers import AlbumCoverService
 from backend.thumbnails.image_thumbs import ThumbnailService
 
 
@@ -243,6 +244,84 @@ class TestApiServer(unittest.TestCase):
                 self.assertEqual(status, 202)
                 self.assertTrue(warm.get("ok"))
                 self.assertIn("accepted", warm)
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
+    def test_album_cover_endpoint_generates_uses_etag_and_invalidates_on_change(self) -> None:
+        try:
+            import PIL  # noqa: F401
+        except ModuleNotFoundError:
+            pillow_available = False
+        else:
+            pillow_available = True
+
+        png_1x1 = b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQI12P4//8/AwAI/AL+X9aZVwAAAABJRU5ErkJggg=="
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "MediaRoot"
+            (root / "album").mkdir(parents=True)
+            for name in ["a.png", "b.png", "c.png", "d.png"]:
+                (root / "album" / name).write_bytes(png_1x1)
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+            server.fileops = FileOpsService(
+                media_root=root,
+                log_store=OperationLogStore(path=Path(tmp) / "oplog.jsonl"),
+                confirm_secret=b"test-secret",
+            )
+            server.album_covers = AlbumCoverService(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                cache_dir=Path(tmp) / "thumb-cache",
+                cover_size=64,
+                cover_quality=80,
+            )
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=5)
+
+            try:
+                conn.request("GET", "/api/album-cover?path=album")
+                resp = conn.getresponse()
+                body = resp.read()
+                if pillow_available:
+                    self.assertEqual(resp.status, 200)
+                    self.assertTrue(body.startswith(b"\xff\xd8"))
+                    etag = resp.headers.get("ETag")
+                    self.assertIsInstance(etag, str)
+
+                    conn.request("GET", "/api/album-cover?path=album", headers={"If-None-Match": etag})
+                    resp = conn.getresponse()
+                    resp.read()
+                    self.assertEqual(resp.status, 304)
+
+                    (root / "album" / "e.png").write_bytes(png_1x1)
+                    conn.request("GET", "/api/album-cover?path=album")
+                    resp = conn.getresponse()
+                    resp.read()
+                    self.assertEqual(resp.status, 200)
+                    etag_after = resp.headers.get("ETag")
+                    self.assertIsInstance(etag_after, str)
+                    self.assertNotEqual(etag_after, etag)
+                else:
+                    self.assertEqual(resp.status, 503)
+                    data = json.loads(body.decode("utf-8"))
+                    self.assertEqual(data.get("error", {}).get("code"), "PILLOW_NOT_INSTALLED")
             finally:
                 conn.close()
                 server.shutdown()
