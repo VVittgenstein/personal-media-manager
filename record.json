@@ -520,7 +520,7 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251212-act-004-category-views"
       ],
@@ -529,17 +529,24 @@
       "unblock_plan": "",
       "estimate_h": 5,
       "interfaces_touched": [
-        "frontend/overlay"
+        "frontend/overlay",
+        "api/media"
       ],
       "artifacts": [
-        "image overlay component"
+        "image overlay component",
+        "GET /api/album-images?path=... (consumed)",
+        "frontend/spa/app.js",
+        "frontend/spa/styles.css",
+        "backend/api/server.py",
+        "backend/api/tests/test_server.py",
+        "Compact/Compact-T-20251212-act-005-image-overlay-ui-2025-12-13-T094348Z.md"
       ],
       "citations": [
         "EVID-001",
         "EVID-002"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-13T11:50:11Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-005",

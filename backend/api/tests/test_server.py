@@ -145,6 +145,116 @@ class TestApiServer(unittest.TestCase):
                 server.server_close()
                 t.join(timeout=2)
 
+    def test_album_images_lists_images_in_album(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "MediaRoot"
+            (root / "album").mkdir(parents=True)
+            (root / "album" / "b.JPG").write_bytes(b"")
+            (root / "album" / "a.png").write_bytes(b"")
+            (root / "album" / "note.txt").write_bytes(b"hello")
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=2)
+
+            try:
+                conn.request("GET", "/api/album-images?path=album")
+                resp = conn.getresponse()
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(data["album_rel_path"], "album")
+                self.assertEqual(data["count"], 2)
+                self.assertEqual(data["items"], ["album/a.png", "album/b.JPG"])
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
+    def test_album_images_missing_album_returns_404(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "MediaRoot"
+            root.mkdir(parents=True)
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=2)
+
+            try:
+                conn.request("GET", "/api/album-images?path=missing-album")
+                resp = conn.getresponse()
+                self.assertEqual(resp.status, 404)
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(data["error"]["code"], "NOT_FOUND")
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
+    def test_album_images_rejects_symlinked_album_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "MediaRoot"
+            root.mkdir(parents=True)
+            outside = tmp_path / "Outside"
+            outside.mkdir(parents=True)
+            (outside / "a.jpg").write_bytes(b"")
+
+            try:
+                os.symlink(outside, root / "album", target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"symlinks not supported: {exc}")
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=2)
+
+            try:
+                conn.request("GET", "/api/album-images?path=album")
+                resp = conn.getresponse()
+                self.assertEqual(resp.status, 400)
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(data["error"]["code"], "SANDBOX_VIOLATION")
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
     def test_fileops_delete_and_move_require_confirm_and_write_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

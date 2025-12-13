@@ -4,7 +4,9 @@ import argparse
 import json
 import logging
 import mimetypes
+import os
 import secrets
+import stat
 import threading
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 
 from backend.indexing.media_index import MediaIndex, build_media_index
 from backend.indexing.media_types import MediaTypes, load_media_types
+from backend.scanner.sandbox import MediaRootSandbox, SandboxViolation, normalize_rel_path
 from backend.security.fileops import FileOpsError, FileOpsService
 from backend.security.operation_log import OperationLogStore
 from backend.thumbnails.album_covers import AlbumCoverError, AlbumCoverService
@@ -60,6 +63,7 @@ class _IndexCache:
 
 class _MediaApiServer(ThreadingHTTPServer):
     index_cache: _IndexCache
+    media_types: MediaTypes
     fileops: FileOpsService
     thumbs: ThumbnailService
     album_covers: AlbumCoverService
@@ -250,6 +254,79 @@ class _Handler(BaseHTTPRequestHandler):
                     "scanned_at_ms": index.scanned_at_ms,
                     "games": [g.as_dict() for g in index.games],
                     "others": [o.as_dict() for o in index.others],
+                },
+            )
+            return
+
+        if path == "/api/album-images":
+            album_rel_path = query.get("path", [""])[0]
+            if not isinstance(album_rel_path, str) or not album_rel_path.strip():
+                self._send_error(400, "INVALID_REQUEST", "missing or invalid 'path' query parameter")
+                return
+
+            try:
+                album_rel_path = normalize_rel_path(album_rel_path)
+            except SandboxViolation as exc:
+                self._send_error(400, "SANDBOX_VIOLATION", str(exc))
+                return
+
+            if album_rel_path == "":
+                self._send_error(400, "INVALID_REQUEST", "path must not be MediaRoot root")
+                return
+
+            sandbox = MediaRootSandbox(self.server.index_cache.media_root)
+            try:
+                abs_dir = sandbox.to_abs_path_allow_missing(album_rel_path)
+            except SandboxViolation as exc:
+                self._send_error(400, "SANDBOX_VIOLATION", str(exc))
+                return
+
+            try:
+                st = os.stat(abs_dir, follow_symlinks=False)
+            except FileNotFoundError:
+                self._send_error(404, "NOT_FOUND", f"album not found: {album_rel_path}")
+                return
+            except OSError as exc:
+                self._send_error(500, "STAT_FAILED", f"cannot stat album: {exc}")
+                return
+
+            reparse_attr = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            if os.path.islink(abs_dir) or bool(getattr(st, "st_file_attributes", 0) & reparse_attr):
+                self._send_error(400, "SANDBOX_VIOLATION", f"album path must not be a symlink/reparse point: {album_rel_path}")
+                return
+
+            if not stat.S_ISDIR(st.st_mode):
+                self._send_error(404, "NOT_A_DIR", f"not a directory: {album_rel_path}")
+                return
+
+            media_types = getattr(self.server, "media_types", None) or getattr(self.server.index_cache, "_media_types", None)
+            if media_types is None:
+                media_types = MediaTypes.defaults()
+
+            items: list[str] = []
+            try:
+                with os.scandir(abs_dir) as it:
+                    for entry in it:
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        ext = os.path.splitext(entry.name)[1].lower()
+                        if media_types.categorize_ext(ext) != "image":
+                            continue
+                        items.append(f"{album_rel_path}/{entry.name}")
+            except FileNotFoundError:
+                self._send_error(404, "NOT_FOUND", f"album not found: {album_rel_path}")
+                return
+            except OSError as exc:
+                self._send_error(500, "READ_DIR_FAILED", f"cannot read album directory: {exc}")
+                return
+
+            items.sort(key=str.casefold)
+            self._send_json(
+                200,
+                {
+                    "album_rel_path": album_rel_path,
+                    "count": len(items),
+                    "items": items,
                 },
             )
             return
@@ -464,6 +541,7 @@ def run_server(
 
     server: _MediaApiServer = _MediaApiServer((host, port), _Handler)
     server.index_cache = cache
+    server.media_types = media_types
     default_log_path = Path(__file__).resolve().parents[1] / "data" / "operation-log.jsonl"
     log_store = OperationLogStore(path=operation_log_path or default_log_path)
     server.fileops = FileOpsService(
