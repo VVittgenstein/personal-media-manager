@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -12,6 +13,7 @@ from backend.security.fileops import FileOpsService
 from backend.security.operation_log import OperationLogStore
 from backend.thumbnails.album_covers import AlbumCoverService
 from backend.thumbnails.image_thumbs import ThumbnailService
+from backend.thumbnails.video_mosaics import VideoMosaicService
 
 
 class TestApiServer(unittest.TestCase):
@@ -322,6 +324,178 @@ class TestApiServer(unittest.TestCase):
                     self.assertEqual(resp.status, 503)
                     data = json.loads(body.decode("utf-8"))
                     self.assertEqual(data.get("error", {}).get("code"), "PILLOW_NOT_INSTALLED")
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
+    def test_video_mosaic_endpoint_uses_etag_and_invalidates_on_change(self) -> None:
+        try:
+            import PIL  # noqa: F401
+        except ModuleNotFoundError:
+            pillow_available = False
+        else:
+            pillow_available = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "MediaRoot"
+            root.mkdir(parents=True)
+            video_path = root / "v.mp4"
+            video_path.write_bytes(b"not-a-real-video")
+
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir(parents=True)
+            (bin_dir / "ffprobe").write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "sys.stdout.write('10.0\\n')\n"
+                "raise SystemExit(0)\n",
+                encoding="utf-8",
+            )
+            (bin_dir / "ffmpeg").write_text(
+                "#!/usr/bin/env python3\n"
+                "import base64\n"
+                "import pathlib\n"
+                "import sys\n"
+                "png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQI12P4//8/AwAI/AL+X9aZVwAAAABJRU5ErkJggg==')\n"
+                "out = pathlib.Path(sys.argv[-1])\n"
+                "out.parent.mkdir(parents=True, exist_ok=True)\n"
+                "out.write_bytes(png)\n"
+                "raise SystemExit(0)\n",
+                encoding="utf-8",
+            )
+            os.chmod(bin_dir / "ffprobe", 0o755)
+            os.chmod(bin_dir / "ffmpeg", 0o755)
+
+            orig_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = str(bin_dir) + os.pathsep + orig_path
+            self.addCleanup(lambda: os.environ.__setitem__("PATH", orig_path))
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+            server.fileops = FileOpsService(
+                media_root=root,
+                log_store=OperationLogStore(path=tmp_path / "oplog.jsonl"),
+                confirm_secret=b"test-secret",
+            )
+            server.video_mosaics = VideoMosaicService(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                cache_dir=tmp_path / "thumb-cache",
+                mosaic_size=64,
+                mosaic_quality=80,
+                gen_workers=1,
+            )
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=5)
+
+            try:
+                conn.request("GET", "/api/video-mosaic?path=v.mp4")
+                resp = conn.getresponse()
+                body = resp.read()
+                if pillow_available:
+                    self.assertEqual(resp.status, 200)
+                    self.assertTrue(body.startswith(b"\xff\xd8"))
+                    etag = resp.headers.get("ETag")
+                    self.assertIsInstance(etag, str)
+
+                    conn.request("GET", "/api/video-mosaic?path=v.mp4", headers={"If-None-Match": etag})
+                    resp = conn.getresponse()
+                    resp.read()
+                    self.assertEqual(resp.status, 304)
+
+                    video_path.write_bytes(b"changed")
+                    conn.request("GET", "/api/video-mosaic?path=v.mp4")
+                    resp = conn.getresponse()
+                    resp.read()
+                    self.assertEqual(resp.status, 200)
+                    etag_after = resp.headers.get("ETag")
+                    self.assertIsInstance(etag_after, str)
+                    self.assertNotEqual(etag_after, etag)
+                else:
+                    self.assertEqual(resp.status, 503)
+                    data = json.loads(body.decode("utf-8"))
+                    self.assertEqual(data.get("error", {}).get("code"), "PILLOW_NOT_INSTALLED")
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
+    def test_video_mosaic_endpoint_serves_cached_without_ffmpeg(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "MediaRoot"
+            root.mkdir(parents=True)
+            (root / "v.mp4").write_bytes(b"not-a-real-video")
+
+            empty_bin = tmp_path / "bin"
+            empty_bin.mkdir(parents=True)
+            orig_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = str(empty_bin)
+            self.addCleanup(lambda: os.environ.__setitem__("PATH", orig_path))
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+            server.fileops = FileOpsService(
+                media_root=root,
+                log_store=OperationLogStore(path=tmp_path / "oplog.jsonl"),
+                confirm_secret=b"test-secret",
+            )
+            server.video_mosaics = VideoMosaicService(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                cache_dir=tmp_path / "thumb-cache",
+                mosaic_size=64,
+                mosaic_quality=80,
+                gen_workers=1,
+            )
+
+            rel_path, abs_path, st = server.video_mosaics._resolve_abs_video("v.mp4")
+            etag, cache_path = server.video_mosaics._etag_and_cache_path(
+                rel_path=rel_path,
+                abs_path=abs_path,
+                st=st,
+            )
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(b"\xff\xd8\xff\xd9")
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=5)
+
+            try:
+                conn.request("GET", "/api/video-mosaic?path=v.mp4")
+                resp = conn.getresponse()
+                body = resp.read()
+                self.assertEqual(resp.status, 200)
+                self.assertTrue(body.startswith(b"\xff\xd8"))
+                self.assertEqual(resp.headers.get("ETag"), f"\"{etag}\"")
+
+                conn.request("GET", "/api/video-mosaic?path=v.mp4", headers={"If-None-Match": f"\"{etag}\""})
+                resp = conn.getresponse()
+                resp.read()
+                self.assertEqual(resp.status, 304)
             finally:
                 conn.close()
                 server.shutdown()

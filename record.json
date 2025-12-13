@@ -375,11 +375,11 @@
       "acceptance_draft": [
         "对视频抽取 4 帧并生成 2×2 拼图缩略图",
         "缩略图缓存命中复用；视频更新时重建",
-        "FFmpeg 不可用时 API 返回明确错误与安装/配置指引"
+        "FFmpeg 不可用时：缓存命中仍可返回；缓存未命中则返回明确错误与安装/配置指引"
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251212-act-001-classify-api",
         "T-20251212-act-011-license-review"
@@ -394,7 +394,11 @@
       ],
       "artifacts": [
         "video mosaic generator",
-        "video cover cache"
+        "video mosaic cache",
+        "/api/video-mosaic?path=...",
+        "backend/thumbnails/video_mosaics.py",
+        "backend/api/server.py",
+        "Compact/Compact-T-20251212-act-003-ffmpeg-mosaic-2025-12-13-T064042Z.md"
       ],
       "citations": [
         "EVID-002",
@@ -402,7 +406,7 @@
         "EVID-009"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-13T03:42:46Z",
+      "updated_at": "2025-12-13T07:08:01Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-003",
