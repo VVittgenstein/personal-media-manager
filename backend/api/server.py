@@ -27,6 +27,20 @@ logger = logging.getLogger(__name__)
 
 _SPA_ROOT = Path(__file__).resolve().parents[2] / "frontend" / "spa"
 
+_VIDEO_MIME_TYPES: dict[str, str] = {
+    ".avi": "video/x-msvideo",
+    ".flv": "video/x-flv",
+    ".m4v": "video/mp4",
+    ".mkv": "video/x-matroska",
+    ".mov": "video/quicktime",
+    ".mp4": "video/mp4",
+    ".mpeg": "video/mpeg",
+    ".mpg": "video/mpeg",
+    ".ts": "video/mp2t",
+    ".webm": "video/webm",
+    ".wmv": "video/x-ms-wmv",
+}
+
 
 class _IndexCache:
     def __init__(
@@ -92,6 +106,13 @@ class _Handler(BaseHTTPRequestHandler):
         if content_type.startswith("text/") or content_type in {"application/javascript", "application/json"}:
             return f"{content_type}; charset=utf-8"
         return content_type
+
+    def _guess_media_content_type(self, file_path: Path) -> str:
+        ext = file_path.suffix.lower()
+        override = _VIDEO_MIME_TYPES.get(ext)
+        if override is not None:
+            return override
+        return self._guess_content_type(file_path)
 
     def _serve_spa(self, path: str) -> bool:
         if not _SPA_ROOT.exists():
@@ -446,6 +467,124 @@ class _Handler(BaseHTTPRequestHandler):
                 extra_headers=headers,
                 cache_control="public, max-age=0, must-revalidate",
             )
+            return
+
+        if path == "/api/media":
+            rel_path = query.get("path", [""])[0]
+            if not isinstance(rel_path, str) or not rel_path.strip():
+                self._send_error(400, "INVALID_REQUEST", "missing or invalid 'path' query parameter")
+                return
+
+            try:
+                rel_path = normalize_rel_path(rel_path)
+            except SandboxViolation as exc:
+                self._send_error(400, "SANDBOX_VIOLATION", str(exc))
+                return
+
+            if rel_path == "":
+                self._send_error(400, "INVALID_REQUEST", "path must not be MediaRoot root")
+                return
+
+            media_types = getattr(self.server, "media_types", None) or getattr(self.server.index_cache, "_media_types", None)
+            if media_types is None:
+                media_types = MediaTypes.defaults()
+            ext = os.path.splitext(rel_path)[1].lower()
+            if media_types.categorize_ext(ext) != "video":
+                self._send_error(415, "UNSUPPORTED_MEDIA_TYPE", f"not a video: {rel_path}")
+                return
+
+            sandbox = MediaRootSandbox(self.server.index_cache.media_root)
+            try:
+                abs_file = sandbox.to_abs_path_allow_missing(rel_path)
+            except SandboxViolation as exc:
+                self._send_error(400, "SANDBOX_VIOLATION", str(exc))
+                return
+
+            try:
+                st = os.stat(abs_file, follow_symlinks=False)
+            except FileNotFoundError:
+                self._send_error(404, "NOT_FOUND", f"file not found: {rel_path}")
+                return
+            except OSError as exc:
+                self._send_error(500, "STAT_FAILED", f"cannot stat file: {exc}")
+                return
+
+            if not stat.S_ISREG(st.st_mode):
+                self._send_error(404, "NOT_A_FILE", f"not a file: {rel_path}")
+                return
+
+            file_size = int(getattr(st, "st_size", 0) or 0)
+            content_type = self._guess_media_content_type(abs_file)
+            range_header = self.headers.get("Range")
+
+            start = 0
+            end = max(0, file_size - 1)
+            status = 200
+
+            if range_header and range_header.startswith("bytes=") and file_size > 0:
+                spec = range_header[len("bytes=") :].strip()
+                if "," not in spec and "-" in spec:
+                    raw_start, raw_end = spec.split("-", 1)
+                    try:
+                        if raw_start == "":
+                            suffix = int(raw_end)
+                            if suffix > 0:
+                                start = max(0, file_size - suffix)
+                                end = file_size - 1
+                                status = 206
+                        else:
+                            candidate_start = int(raw_start)
+                            candidate_end = file_size - 1 if raw_end == "" else int(raw_end)
+
+                            if candidate_start >= file_size:
+                                self.send_response(416)
+                                self.send_header("Content-Type", "application/octet-stream")
+                                self.send_header("Content-Length", "0")
+                                self.send_header("Content-Range", f"bytes */{file_size}")
+                                self.send_header("Accept-Ranges", "bytes")
+                                self.send_header("Cache-Control", "no-store")
+                                self.send_header("Access-Control-Allow-Origin", "*")
+                                self.end_headers()
+                                return
+
+                            if candidate_start < 0:
+                                candidate_start = 0
+                            if candidate_end >= file_size:
+                                candidate_end = file_size - 1
+
+                            if 0 <= candidate_start <= candidate_end:
+                                start = candidate_start
+                                end = candidate_end
+                                status = 206
+                    except ValueError:
+                        status = 200
+
+            length = 0 if file_size <= 0 else (end - start + 1)
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(length))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+            self.end_headers()
+
+            if length <= 0:
+                return
+
+            try:
+                with abs_file.open("rb") as f:
+                    f.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = f.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                return
             return
 
         self._send_error(404, "NOT_FOUND", f"unknown endpoint: {path}")

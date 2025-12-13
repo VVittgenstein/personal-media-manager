@@ -255,6 +255,61 @@ class TestApiServer(unittest.TestCase):
                 server.server_close()
                 t.join(timeout=2)
 
+    def test_media_endpoint_serves_video_and_supports_range_requests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "MediaRoot"
+            root.mkdir(parents=True)
+            (root / "v.mp4").write_bytes(b"0123456789")
+            (root / "note.txt").write_text("hello", encoding="utf-8")
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=2)
+
+            try:
+                conn.request("GET", "/api/media?path=v.mp4")
+                resp = conn.getresponse()
+                body = resp.read()
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(body, b"0123456789")
+                self.assertEqual(resp.headers.get("Accept-Ranges"), "bytes")
+
+                conn.request("GET", "/api/media?path=v.mp4", headers={"Range": "bytes=2-5"})
+                resp = conn.getresponse()
+                body = resp.read()
+                self.assertEqual(resp.status, 206)
+                self.assertEqual(body, b"2345")
+                self.assertEqual(resp.headers.get("Content-Range"), "bytes 2-5/10")
+
+                conn.request("GET", "/api/media?path=v.mp4", headers={"Range": "bytes=999-"})
+                resp = conn.getresponse()
+                body = resp.read()
+                self.assertEqual(resp.status, 416)
+                self.assertEqual(body, b"")
+                self.assertEqual(resp.headers.get("Content-Range"), "bytes */10")
+
+                conn.request("GET", "/api/media?path=note.txt")
+                resp = conn.getresponse()
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(resp.status, 415)
+                self.assertEqual(data["error"]["code"], "UNSUPPORTED_MEDIA_TYPE")
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
     def test_fileops_delete_and_move_require_confirm_and_write_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

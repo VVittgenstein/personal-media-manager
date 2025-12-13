@@ -10,6 +10,7 @@ const API = {
   thumb: (relPath) => `/api/thumb?path=${encodeURIComponent(relPath)}`,
   albumCover: (relPath) => `/api/album-cover?path=${encodeURIComponent(relPath)}`,
   videoMosaic: (relPath) => `/api/video-mosaic?path=${encodeURIComponent(relPath)}`,
+  media: (relPath) => `/api/media?path=${encodeURIComponent(relPath)}`,
 };
 
 const CATEGORIES = [
@@ -62,7 +63,13 @@ const scrollPositions = new Map();
 let renderEpoch = 0;
 let lazyImageObserver = null;
 const imageOverlay = createImageOverlay();
-appRoot.append(imageOverlay.root);
+const videoOverlay = createVideoOverlay();
+appRoot.append(imageOverlay.root, videoOverlay.root);
+
+function closeAllOverlays({ restoreScroll = false, restoreFocus = false } = {}) {
+  imageOverlay.close({ restoreScroll, restoreFocus });
+  videoOverlay.close({ restoreScroll, restoreFocus });
+}
 
 if ("scrollRestoration" in history) {
   history.scrollRestoration = "manual";
@@ -107,7 +114,7 @@ function isSpaNavigableClick(event, anchor) {
 }
 
 function navigate(to, { replace = false } = {}) {
-  imageOverlay.close({ restoreScroll: false, restoreFocus: false });
+  closeAllOverlays({ restoreScroll: false, restoreFocus: false });
   saveScrollPosition();
   const url = new URL(to, location.origin);
   const next = `${url.pathname}${url.search}`;
@@ -547,6 +554,259 @@ function createImageOverlay() {
   };
 }
 
+function createVideoOverlay() {
+  const root = el("div", { class: "overlay overlay--video", "aria-hidden": "true" }, []);
+  const backdrop = el(
+    "button",
+    { class: "overlay__backdrop", type: "button", "aria-label": "Close overlay" },
+    [],
+  );
+  const panel = el("div", { class: "overlay__panel", role: "dialog", "aria-modal": "true" }, []);
+
+  const header = el("div", { class: "overlay__header" }, []);
+  const meta = el("div", { class: "overlay__meta" }, []);
+  const title = el("div", { class: "overlay__title" }, []);
+  const subtitle = el("div", { class: "overlay__subtitle" }, []);
+  meta.append(title, subtitle);
+
+  const controls = el("div", { class: "overlay__controls" }, []);
+  const closeBtn = el(
+    "button",
+    { class: "overlay__iconbtn", type: "button", "aria-label": "Close (Esc)" },
+    [el("span", { text: "✕" }, [])],
+  );
+  controls.append(closeBtn);
+  header.append(meta, controls);
+
+  const viewer = el("div", { class: "overlay__viewer" }, []);
+  const prevBtn = el(
+    "button",
+    { class: "overlay__nav overlay__nav--prev", type: "button", "aria-label": "Previous (←)" },
+    [el("span", { text: "←" }, [])],
+  );
+  const nextBtn = el(
+    "button",
+    { class: "overlay__nav overlay__nav--next", type: "button", "aria-label": "Next (→)" },
+    [el("span", { text: "→" }, [])],
+  );
+  const stage = el("div", { class: "overlay__stage" }, []);
+  const bg = el("div", { class: "overlay__bg" }, []);
+  const status = el("div", { class: "overlay__status", text: "" }, []);
+  const video = el("video", { class: "overlay__video", controls: "", playsinline: "", preload: "metadata" }, []);
+  stage.append(bg, status, video);
+  viewer.append(prevBtn, stage, nextBtn);
+
+  panel.append(header, viewer);
+  root.append(backdrop, panel);
+
+  let requestEpoch = 0;
+  let isOpen = false;
+  let items = [];
+  let index = 0;
+  let contextTitle = "";
+  let message = "";
+  let openerEl = null;
+  let savedScrollY = 0;
+  let savedBodyOverflow = "";
+  let savedBodyPaddingRight = "";
+
+  function lockBodyScroll() {
+    savedScrollY = window.scrollY;
+    savedBodyOverflow = document.body.style.overflow;
+    savedBodyPaddingRight = document.body.style.paddingRight;
+    const gap = window.innerWidth - document.documentElement.clientWidth;
+    document.body.classList.add("overlay-open");
+    document.body.style.overflow = "hidden";
+    if (gap > 0) {
+      document.body.style.paddingRight = `${gap}px`;
+    }
+  }
+
+  function unlockBodyScroll() {
+    document.body.classList.remove("overlay-open");
+    document.body.style.overflow = savedBodyOverflow;
+    document.body.style.paddingRight = savedBodyPaddingRight;
+  }
+
+  function stopVideo() {
+    try {
+      video.pause();
+    } catch {
+      // ignore
+    }
+    video.removeAttribute("src");
+    video.removeAttribute("poster");
+    try {
+      video.load();
+    } catch {
+      // ignore
+    }
+  }
+
+  function update() {
+    if (!isOpen) return;
+    const total = items.length;
+    const hasItems = total > 0;
+    prevBtn.disabled = !hasItems || index <= 0;
+    nextBtn.disabled = !hasItems || index >= total - 1;
+    stage.classList.toggle("has-media", hasItems);
+
+    const current = hasItems ? items[index] : null;
+    const currentRelPath = current?.rel_path ? String(current.rel_path) : "";
+    const currentName = currentRelPath ? basename(currentRelPath) || currentRelPath : "";
+    title.textContent = contextTitle || currentName || "Video";
+
+    if (hasItems && currentRelPath) {
+      const ext = current?.ext ? String(current.ext) : "";
+      const folder = current?.folder_rel_path ? String(current.folder_rel_path) : "/";
+      const size = current?.size_bytes !== null && current?.size_bytes !== undefined ? formatBytes(current.size_bytes) : "";
+      const parts = [`${index + 1}/${total}`];
+      if (ext) parts.push(ext);
+      if (size && size !== "—") parts.push(size);
+      if (folder) parts.push(folder);
+      subtitle.textContent = `${currentName} · ${parts.join(" · ")}`;
+
+      status.textContent = "Loading…";
+      const src = API.media(currentRelPath);
+      const poster = API.videoMosaic(currentRelPath);
+      bg.style.backgroundImage = `url("${poster}")`;
+
+      if (video.getAttribute("src") !== src) {
+        stopVideo();
+        video.src = src;
+        video.poster = poster;
+      }
+
+      const req = requestEpoch;
+      const playPromise = video.play();
+      if (playPromise && typeof playPromise.then === "function") {
+        playPromise
+          .then(() => {
+            if (req !== requestEpoch || !isOpen) return;
+            status.textContent = "";
+          })
+          .catch((err) => {
+            if (req !== requestEpoch || !isOpen) return;
+            status.textContent = err?.message ? String(err.message) : "Autoplay blocked. Press play.";
+          });
+      } else {
+        status.textContent = "";
+      }
+      return;
+    }
+
+    subtitle.textContent = "";
+    bg.style.backgroundImage = "";
+    stopVideo();
+    status.textContent = message || "No video.";
+  }
+
+  function open({ items: nextItems, startIndex = 0, title: nextTitle = "", opener } = {}) {
+    requestEpoch += 1;
+    openerEl = opener instanceof HTMLElement ? opener : document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    contextTitle = String(nextTitle || "");
+    message = "";
+    items = Array.isArray(nextItems)
+      ? nextItems.filter((item) => item && typeof item.rel_path === "string" && item.rel_path.trim())
+      : [];
+    const max = Math.max(0, items.length - 1);
+    index = Math.min(Math.max(0, Number(startIndex) || 0), max);
+
+    if (!isOpen) {
+      isOpen = true;
+      lockBodyScroll();
+      root.classList.add("is-open");
+      root.setAttribute("aria-hidden", "false");
+    }
+
+    update();
+    closeBtn.focus({ preventScroll: true });
+  }
+
+  function close({ restoreScroll = true, restoreFocus = true } = {}) {
+    if (!isOpen) return;
+    requestEpoch += 1;
+    isOpen = false;
+    items = [];
+    index = 0;
+    contextTitle = "";
+    message = "";
+    root.classList.remove("is-open");
+    root.setAttribute("aria-hidden", "true");
+    stage.classList.remove("has-media");
+    bg.style.backgroundImage = "";
+    stopVideo();
+    unlockBodyScroll();
+
+    const focusTarget = openerEl;
+    openerEl = null;
+    const y = savedScrollY;
+    if (restoreScroll) {
+      requestAnimationFrame(() => window.scrollTo(0, y));
+    }
+    if (restoreFocus && focusTarget && focusTarget.isConnected) {
+      focusTarget.focus({ preventScroll: true });
+    }
+  }
+
+  function move(delta) {
+    if (!isOpen) return;
+    const total = items.length;
+    if (!total) return;
+    const nextIndex = Math.min(Math.max(0, index + delta), total - 1);
+    if (nextIndex === index) return;
+    index = nextIndex;
+    update();
+  }
+
+  backdrop.addEventListener("click", () => close());
+  closeBtn.addEventListener("click", () => close());
+  prevBtn.addEventListener("click", () => move(-1));
+  nextBtn.addEventListener("click", () => move(1));
+
+  video.addEventListener("playing", () => {
+    if (!isOpen) return;
+    status.textContent = "";
+  });
+  video.addEventListener("error", () => {
+    if (!isOpen) return;
+    status.textContent = "Failed to load.";
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (!isOpen) return;
+    if (event.defaultPrevented) return;
+    if (event.target instanceof HTMLElement) {
+      const tag = event.target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "VIDEO" || event.target.isContentEditable) return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      move(-1);
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      move(1);
+    }
+  });
+
+  return {
+    root,
+    open,
+    close,
+    get isOpen() {
+      return isOpen;
+    },
+  };
+}
+
 function renderHome(_token) {
   const header = el("div", { class: "view-header" }, [
     el("div", {}, [
@@ -671,7 +931,7 @@ function renderVideosGrid(items) {
   const grid = el(
     "div",
     { class: "videos-grid" },
-    items.map((item) => {
+    items.map((item, i) => {
       const name = basename(item.rel_path) || item.rel_path;
       const thumb = createLazyThumb({
         src: API.videoMosaic(item.rel_path),
@@ -684,9 +944,20 @@ function renderVideosGrid(items) {
         el("span", { text: formatBytes(item.size_bytes) }),
         el("span", { text: item.folder_rel_path ? item.folder_rel_path : "/" }),
       ]);
-      return el("div", { class: "video-card" }, [el("div", { class: "video-cover" }, [thumb.frame]), title, meta]);
+      return el("button", { class: "video-card", type: "button", "data-index": String(i) }, [
+        el("div", { class: "video-cover" }, [thumb.frame]),
+        title,
+        meta,
+      ]);
     }),
   );
+  grid.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("button[data-index]") : null;
+    if (!target || !grid.contains(target)) return;
+    const idx = Number.parseInt(target.getAttribute("data-index") || "", 10);
+    if (!Number.isFinite(idx)) return;
+    videoOverlay.open({ items, startIndex: idx, title: "Videos", opener: target });
+  });
   observeLazyImages(grid);
   return grid;
 }
@@ -869,7 +1140,7 @@ function renderNotFound(_token) {
 }
 
 window.addEventListener("popstate", () => {
-  imageOverlay.close({ restoreScroll: false, restoreFocus: false });
+  closeAllOverlays({ restoreScroll: false, restoreFocus: false });
   render();
 });
 
