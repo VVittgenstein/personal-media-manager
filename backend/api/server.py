@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import mimetypes
 import secrets
 import threading
 from email.utils import formatdate
@@ -20,6 +21,8 @@ from backend.thumbnails.image_thumbs import ThumbError, ThumbKeyMode, ThumbnailS
 from backend.thumbnails.video_mosaics import VideoMosaicError, VideoMosaicService
 
 logger = logging.getLogger(__name__)
+
+_SPA_ROOT = Path(__file__).resolve().parents[2] / "frontend" / "spa"
 
 
 class _IndexCache:
@@ -77,6 +80,50 @@ class _MediaApiServer(ThreadingHTTPServer):
 
 class _Handler(BaseHTTPRequestHandler):
     server: _MediaApiServer
+
+    def _guess_content_type(self, file_path: Path) -> str:
+        content_type, _encoding = mimetypes.guess_type(str(file_path))
+        if content_type is None:
+            return "application/octet-stream"
+        if content_type.startswith("text/") or content_type in {"application/javascript", "application/json"}:
+            return f"{content_type}; charset=utf-8"
+        return content_type
+
+    def _serve_spa(self, path: str) -> bool:
+        if not _SPA_ROOT.exists():
+            return False
+
+        spa_root_resolved = _SPA_ROOT.resolve()
+
+        if path in {"", "/"}:
+            index_path = _SPA_ROOT / "index.html"
+            if not index_path.exists():
+                return False
+            self._send_file(200, file_path=index_path, content_type="text/html; charset=utf-8")
+            return True
+
+        rel = path.lstrip("/")
+        target = (_SPA_ROOT / rel).resolve()
+        if not target.is_relative_to(spa_root_resolved):
+            self._send_error(400, "INVALID_REQUEST", "invalid path")
+            return True
+
+        if target.is_file():
+            self._send_file(
+                200,
+                file_path=target,
+                content_type=self._guess_content_type(target),
+            )
+            return True
+
+        # SPA route fallback: for non-file paths like /images, /videos, ...
+        if "." not in Path(path).name:
+            index_path = _SPA_ROOT / "index.html"
+            if index_path.exists():
+                self._send_file(200, file_path=index_path, content_type="text/html; charset=utf-8")
+                return True
+
+        return False
 
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -144,12 +191,23 @@ class _Handler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         refresh = query.get("refresh", ["0"])[0] in {"1", "true", "True", "yes"}
 
-        try:
-            index = self.server.index_cache.get(refresh=refresh)
-        except Exception as exc:
-            logger.exception("failed to build index: %s", exc)
-            self._send_error(500, "INDEX_BUILD_FAILED", str(exc))
+        if not path.startswith("/api/"):
+            if self._serve_spa(path):
+                return
+            self._send_error(404, "NOT_FOUND", f"unknown endpoint: {path}")
             return
+
+        if path == "/api/health":
+            self._send_json(200, {"ok": True})
+            return
+
+        if path in {"/api/albums", "/api/scattered", "/api/videos", "/api/others"}:
+            try:
+                index = self.server.index_cache.get(refresh=refresh)
+            except Exception as exc:
+                logger.exception("failed to build index: %s", exc)
+                self._send_error(500, "INDEX_BUILD_FAILED", str(exc))
+                return
 
         if path == "/api/albums":
             self._send_json(
@@ -194,10 +252,6 @@ class _Handler(BaseHTTPRequestHandler):
                     "others": [o.as_dict() for o in index.others],
                 },
             )
-            return
-
-        if path == "/api/health":
-            self._send_json(200, {"ok": True})
             return
 
         if path == "/api/thumb":

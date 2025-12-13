@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Personal Media Manager</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <header class="topbar">
+        <a class="brand" href="/" data-nav aria-label="Home">
+          <span class="brand__title">Media Manager</span>
+          <span class="brand__badge">local</span>
+        </a>
+
+        <nav class="nav" aria-label="Primary">
+          <a class="nav__item" href="/images" data-nav>Images</a>
+          <a class="nav__item" href="/scattered" data-nav>Scattered</a>
+          <a class="nav__item" href="/videos" data-nav>Videos</a>
+          <a class="nav__item" href="/games" data-nav>Games</a>
+          <a class="nav__item" href="/others" data-nav>Others</a>
+        </nav>
+      </header>
+
+      <main class="main" id="main" tabindex="-1">
+        <noscript>
+          <div class="card">
+            <div class="card__title">需要启用 JavaScript</div>
+            <div class="card__desc">该 WebUI 使用单页应用（SPA）实现同页切换。</div>
+          </div>
+        </noscript>
+      </main>
+
+      <footer class="footer">
+        <span class="footer__text">Local WebUI · <a class="footer__link" href="/api/health">/api/health</a></span>
+      </footer>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

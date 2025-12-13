@@ -428,7 +428,7 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "done",
       "dependencies": [],
       "blocked": false,
       "blocked_by": [],
@@ -438,15 +438,19 @@
         "frontend/spa"
       ],
       "artifacts": [
-        "home grid",
-        "view switcher"
+        "GET / (SPA)",
+        "GET /images|/scattered|/videos|/games|/others (SPA routes)",
+        "frontend/spa/index.html",
+        "frontend/spa/app.js",
+        "frontend/spa/styles.css",
+        "Compact/Compact-T-20251212-act-004-spa-shell-2025-12-13-T073003Z.md"
       ],
       "citations": [
         "EVID-001",
         "EVID-002"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-13T07:30:03Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-004",

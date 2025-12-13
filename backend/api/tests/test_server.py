@@ -91,6 +91,60 @@ class TestApiServer(unittest.TestCase):
                 server.server_close()
                 t.join(timeout=2)
 
+    def test_spa_shell_serves_index_and_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "MediaRoot"
+            root.mkdir(parents=True)
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=2)
+
+            try:
+                conn.request("GET", "/")
+                resp = conn.getresponse()
+                body = resp.read().decode("utf-8", errors="replace")
+                self.assertEqual(resp.status, 200)
+                self.assertIn("text/html", resp.headers.get("Content-Type", ""))
+                self.assertIn("Personal Media Manager", body)
+
+                conn.request("GET", "/images")
+                resp = conn.getresponse()
+                body = resp.read().decode("utf-8", errors="replace")
+                self.assertEqual(resp.status, 200)
+                self.assertIn("text/html", resp.headers.get("Content-Type", ""))
+                self.assertIn("id=\"app\"", body)
+
+                conn.request("GET", "/styles.css")
+                resp = conn.getresponse()
+                resp.read()
+                self.assertEqual(resp.status, 200)
+                self.assertIn("text/css", resp.headers.get("Content-Type", ""))
+
+                conn.request("GET", "/app.js")
+                resp = conn.getresponse()
+                resp.read()
+                self.assertEqual(resp.status, 200)
+                self.assertTrue(
+                    resp.headers.get("Content-Type", "").startswith(("text/javascript", "application/javascript"))
+                )
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
     def test_fileops_delete_and_move_require_confirm_and_write_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
