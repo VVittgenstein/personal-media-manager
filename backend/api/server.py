@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import logging
 import mimetypes
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from backend.config.backend_config import load_backend_config
 from backend.indexing.media_index import MediaIndex, build_media_index
 from backend.indexing.media_types import MediaTypes, load_media_types
 from backend.scanner.sandbox import MediaRootSandbox, SandboxViolation, normalize_rel_path
@@ -40,6 +42,55 @@ _VIDEO_MIME_TYPES: dict[str, str] = {
     ".webm": "video/webm",
     ".wmv": "video/x-ms-wmv",
 }
+
+
+def _is_addr_in_use_error(exc: BaseException) -> bool:
+    if not isinstance(exc, OSError):
+        return False
+    if getattr(exc, "errno", None) == errno.EADDRINUSE:
+        return True
+    return getattr(exc, "winerror", None) == 10048
+
+
+def _format_access_url(host: str, port: int) -> str:
+    display_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    return f"http://{display_host}:{port}"
+
+
+def _bind_http_server(
+    host: str,
+    port: int,
+    *,
+    conflict_mode: str,
+    search_limit: int,
+) -> _MediaApiServer:
+    if conflict_mode not in {"auto", "fail"}:
+        raise ValueError("conflict_mode must be 'auto' or 'fail'")
+
+    if port == 0 or conflict_mode == "fail":
+        return _MediaApiServer((host, port), _Handler)
+
+    if search_limit <= 0:
+        raise ValueError("search_limit must be > 0")
+
+    last_exc: OSError | None = None
+    max_port = 65535
+    attempts = 0
+    candidate = port
+    while attempts < search_limit and candidate <= max_port:
+        try:
+            return _MediaApiServer((host, candidate), _Handler)
+        except OSError as exc:
+            if _is_addr_in_use_error(exc):
+                last_exc = exc
+                candidate += 1
+                attempts += 1
+                continue
+            raise
+
+    if last_exc is not None:
+        raise last_exc
+    raise OSError(errno.EADDRINUSE, f"port {port} is in use")
 
 
 class _IndexCache:
@@ -658,6 +709,8 @@ def run_server(
     media_root: str | Path,
     host: str,
     port: int,
+    port_conflict: str = "auto",
+    port_search_limit: int = 50,
     include_trash: bool,
     media_types_config: str | Path | None,
     warm_index: bool,
@@ -678,7 +731,12 @@ def run_server(
     if warm_index:
         cache.get(refresh=True)
 
-    server: _MediaApiServer = _MediaApiServer((host, port), _Handler)
+    server: _MediaApiServer = _bind_http_server(
+        host,
+        port,
+        conflict_mode=port_conflict,
+        search_limit=port_search_limit,
+    )
     server.index_cache = cache
     server.media_types = media_types
     default_log_path = Path(__file__).resolve().parents[1] / "data" / "operation-log.jsonl"
@@ -714,15 +772,41 @@ def run_server(
         key_mode=thumb_key_mode,
         gen_workers=thumb_workers,
     )
-    logger.info("serving on http://%s:%s (MediaRoot=%s)", host, port, cache.media_root)
+    _bind_host, bound_port = server.server_address
+    url = _format_access_url(host, bound_port)
+    if bound_port != port and port != 0:
+        logger.warning("port %s is in use; using %s instead", port, bound_port)
+    logger.info("serving on %s (MediaRoot=%s)", url, cache.media_root)
+    print(url, flush=True)
     server.serve_forever()
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Local media API server (MVP).")
-    parser.add_argument("--media-root", required=True, help="Absolute path to MediaRoot directory.")
-    parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1).")
-    parser.add_argument("--port", type=int, default=5000, help="Bind port (default: 5000).")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to backend config JSON (default: ./config/backend.json if exists).",
+    )
+    parser.add_argument(
+        "--media-root",
+        default=None,
+        help="Absolute path to MediaRoot directory (or set media_root in config file).",
+    )
+    parser.add_argument("--host", default=None, help="Bind host (default: 127.0.0.1).")
+    parser.add_argument("--port", type=int, default=None, help="Bind port (default: 5000).")
+    parser.add_argument(
+        "--port-conflict",
+        choices=["auto", "fail"],
+        default="auto",
+        help="If port is in use: auto=try next ports; fail=exit (default: auto).",
+    )
+    parser.add_argument(
+        "--port-search-limit",
+        type=int,
+        default=50,
+        help="Max ports to try when --port-conflict=auto (default: 50).",
+    )
     parser.add_argument(
         "--include-trash",
         action="store_true",
@@ -781,18 +865,37 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
 
-    run_server(
-        media_root=args.media_root,
-        host=args.host,
-        port=args.port,
-        include_trash=args.include_trash,
-        media_types_config=args.media_types_config,
-        warm_index=not args.no_warm_index,
-        operation_log_path=args.operation_log,
-        thumb_cache_dir=args.thumb_cache_dir,
-        thumb_size=args.thumb_size,
-        thumb_quality=args.thumb_quality,
-        thumb_workers=args.thumb_workers,
-        thumb_key_mode=args.thumb_key,
-    )
+    cfg = load_backend_config(args.config)
+    media_root = args.media_root or cfg.media_root
+    if media_root is None:
+        parser.error("missing MediaRoot: pass --media-root or set media_root in config file")
+    host = args.host or cfg.host or "127.0.0.1"
+    port = args.port if args.port is not None else (cfg.port or 5000)
+
+    try:
+        run_server(
+            media_root=media_root,
+            host=host,
+            port=port,
+            port_conflict=args.port_conflict,
+            port_search_limit=args.port_search_limit,
+            include_trash=args.include_trash,
+            media_types_config=args.media_types_config,
+            warm_index=not args.no_warm_index,
+            operation_log_path=args.operation_log,
+            thumb_cache_dir=args.thumb_cache_dir,
+            thumb_size=args.thumb_size,
+            thumb_quality=args.thumb_quality,
+            thumb_workers=args.thumb_workers,
+            thumb_key_mode=args.thumb_key,
+        )
+    except OSError as exc:
+        if _is_addr_in_use_error(exc):
+            logger.error(
+                "port %s is in use (set --port / config/backend.json, or use --port-conflict auto): %s",
+                port,
+                exc,
+            )
+            return 2
+        raise
     return 0

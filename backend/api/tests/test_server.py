@@ -7,7 +7,7 @@ from base64 import b64decode
 from http.client import HTTPConnection
 from pathlib import Path
 
-from backend.api.server import _Handler, _IndexCache, _MediaApiServer
+from backend.api.server import _Handler, _IndexCache, _MediaApiServer, _bind_http_server
 from backend.indexing.media_types import MediaTypes
 from backend.security.fileops import FileOpsService
 from backend.security.operation_log import OperationLogStore
@@ -90,6 +90,37 @@ class TestApiServer(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 t.join(timeout=2)
+
+    def test_bind_http_server_auto_skips_ports_in_use(self) -> None:
+        occupied: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+        try:
+            in_use_port = occupied.server_address[1]
+            bound: _MediaApiServer = _bind_http_server(
+                "127.0.0.1",
+                in_use_port,
+                conflict_mode="auto",
+                search_limit=50,
+            )
+            try:
+                self.assertNotEqual(bound.server_address[1], in_use_port)
+            finally:
+                bound.server_close()
+        finally:
+            occupied.server_close()
+
+    def test_bind_http_server_fail_raises_when_port_in_use(self) -> None:
+        occupied: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+        try:
+            in_use_port = occupied.server_address[1]
+            with self.assertRaises(OSError):
+                _bind_http_server(
+                    "127.0.0.1",
+                    in_use_port,
+                    conflict_mode="fail",
+                    search_limit=1,
+                )
+        finally:
+            occupied.server_close()
 
     def test_spa_shell_serves_index_and_assets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
