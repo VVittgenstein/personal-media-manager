@@ -473,7 +473,7 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251212-act-004-spa-shell",
         "T-20251212-act-001-classify-api",
@@ -489,17 +489,17 @@
         "api/media"
       ],
       "artifacts": [
-        "albums grid",
-        "scattered list",
-        "videos list",
-        "others list"
+        "GET /api/albums|/scattered|/videos|/others (consumed)",
+        "frontend/spa/app.js",
+        "frontend/spa/styles.css",
+        "Compact/Compact-T-20251212-act-004-category-views-2025-12-13-T090508Z.md"
       ],
       "citations": [
         "EVID-001",
         "EVID-002"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-13T09:05:08Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-004",
