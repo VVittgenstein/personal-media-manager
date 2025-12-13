@@ -7,16 +7,15 @@ This file is a draft and is not legal advice.
 Runtime dependencies not distributed with this repository:
 
 - Python (PSF License / PSF-2.0) — required to run the backend from source.
+- Pillow (PIL / HPND) — required for image thumbnail generation (`pip install -r backend/requirements.txt`).
 - FFmpeg (LGPL-2.1-or-later or GPL-2.0-or-later, depending on build) — optional external tool
   for video frame extraction and thumbnails. Default integration is via external CLI and
   users install/provide `ffmpeg.exe` and `ffprobe.exe` themselves.
 
 Planned/optional dependencies (not currently included in this repository):
 
-- Pillow — permissive license (PIL / HPND) — image thumbnail generation.
 - Video.js — Apache License 2.0 — enhanced video playback UI.
 
 If a release bundles any third-party binaries or source code, the corresponding license texts
 and required notices should be included alongside this file and documented under
 `doc/licenses/`.
-
