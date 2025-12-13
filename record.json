@@ -745,7 +745,7 @@
       ],
       "lane": "now",
       "priority_suggested": "P1",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251212-act-010-backend-config"
       ],
@@ -757,14 +757,17 @@
         "infra/windows"
       ],
       "artifacts": [
-        "start.bat"
+        "start.bat",
+        "infra/windows/start.bat",
+        "infra/windows/start.ps1",
+        "README.md"
       ],
       "citations": [
         "EVID-001",
         "EVID-002"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-13T13:44:12Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-010",
