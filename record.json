@@ -202,7 +202,7 @@
       ],
       "lane": "next",
       "priority_suggested": "P2",
-      "status": "todo",
+      "status": "done",
       "dependencies": [],
       "blocked": false,
       "blocked_by": [],
@@ -212,7 +212,7 @@
         "doc/licenses"
       ],
       "artifacts": [
-        "dependency license list",
+        "doc/licenses/dependency-license-list.md",
         "LICENSE",
         "NOTICE"
       ],
@@ -222,7 +222,7 @@
         "EVID-009"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-13T03:42:46Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-011",
@@ -375,18 +375,9 @@
         "T-20251212-act-001-classify-api",
         "T-20251212-act-011-license-review"
       ],
-      "blocked": true,
-      "blocked_by": [
-        {
-          "dep_id": "DEP-001",
-          "name": "FFmpeg（视频抽帧/缩略图生成）",
-          "type": "tool",
-          "status": "unknown",
-          "doc_url": "",
-          "note": "需确定 Windows 集成方式（随包分发 vs 用户自装）与许可证合规边界"
-        }
-      ],
-      "unblock_plan": "选定 FFmpeg 集成策略并完成许可证清单后再实现；运行时加入可用性检测与提示。",
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
       "estimate_h": 6,
       "interfaces_touched": [
         "backend/video-thumbnails",
@@ -402,7 +393,7 @@
         "EVID-009"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-13T03:42:46Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-003",
@@ -1020,9 +1011,9 @@
       "dep_id": "DEP-001",
       "name": "FFmpeg（视频抽帧/缩略图生成）",
       "type": "tool",
-      "status": "unknown",
-      "doc_url": "",
-      "note": "需确定 Windows 集成方式（随包分发 vs 用户自装）与许可证合规边界",
+      "status": "decided",
+      "doc_url": "doc/licenses/dependency-license-list.md",
+      "note": "默认策略：通过外部 CLI 调用 FFmpeg，且不随包分发；用户自装/自提供 ffmpeg.exe/ffprobe.exe（如需分发请按文档执行合规）。",
       "citations": [
         "EVID-002",
         "EVID-009"
