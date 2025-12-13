@@ -658,7 +658,7 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251212-act-007-fileops-api",
         "T-20251212-act-004-category-views"
@@ -673,14 +673,17 @@
       ],
       "artifacts": [
         "confirm dialogs",
-        "fileops buttons"
+        "fileops buttons",
+        "frontend/spa/app.js",
+        "frontend/spa/styles.css",
+        "Compact/Compact-T-20251212-act-007-fileops-ui-2025-12-13-T125231Z.md"
       ],
       "citations": [
         "EVID-001",
         "EVID-002"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-13T12:52:31Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-007",

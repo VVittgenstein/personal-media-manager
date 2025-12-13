@@ -11,6 +11,8 @@ const API = {
   albumCover: (relPath) => `/api/album-cover?path=${encodeURIComponent(relPath)}`,
   videoMosaic: (relPath) => `/api/video-mosaic?path=${encodeURIComponent(relPath)}`,
   media: (relPath) => `/api/media?path=${encodeURIComponent(relPath)}`,
+  delete: "/api/delete",
+  move: "/api/move",
 };
 
 const CATEGORIES = [
@@ -64,11 +66,13 @@ let renderEpoch = 0;
 let lazyImageObserver = null;
 const imageOverlay = createImageOverlay();
 const videoOverlay = createVideoOverlay();
-appRoot.append(imageOverlay.root, videoOverlay.root);
+const fileOpsDialog = createFileOpsDialog();
+appRoot.append(imageOverlay.root, videoOverlay.root, fileOpsDialog.root);
 
 function closeAllOverlays({ restoreScroll = false, restoreFocus = false } = {}) {
   imageOverlay.close({ restoreScroll, restoreFocus });
   videoOverlay.close({ restoreScroll, restoreFocus });
+  fileOpsDialog.close({ restoreScroll, restoreFocus });
 }
 
 if ("scrollRestoration" in history) {
@@ -278,8 +282,12 @@ function createLazyThumb({ src, alt, placeholder = "" } = {}) {
   return { frame, img };
 }
 
-async function fetchJson(url) {
-  const res = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store" });
+async function fetchJson(url, init = {}) {
+  const headers = new Headers(init?.headers || {});
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json");
+  }
+  const res = await fetch(url, { ...init, headers, cache: "no-store" });
   const contentType = res.headers.get("Content-Type") || "";
   const isJson = contentType.includes("application/json");
   let payload;
@@ -301,6 +309,14 @@ async function fetchJson(url) {
   }
 
   return payload;
+}
+
+async function postJson(url, body) {
+  return fetchJson(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
 }
 
 function createImageOverlay() {
@@ -807,6 +823,379 @@ function createVideoOverlay() {
   };
 }
 
+function createFileOpsDialog() {
+  const root = el("div", { class: "modal", "aria-hidden": "true" }, []);
+  const backdrop = el("button", { class: "modal__backdrop", type: "button", "aria-label": "Close dialog" }, []);
+  const panel = el("div", { class: "modal__panel", role: "dialog", "aria-modal": "true" }, []);
+
+  const header = el("div", { class: "modal__header" }, []);
+  const meta = el("div", { class: "modal__meta" }, []);
+  const title = el("div", { class: "modal__title", text: "" }, []);
+  const subtitle = el("div", { class: "modal__subtitle", text: "" }, []);
+  meta.append(title, subtitle);
+  const closeBtn = el(
+    "button",
+    { class: "modal__iconbtn", type: "button", "aria-label": "Close dialog (Esc)" },
+    [el("span", { text: "✕" }, [])],
+  );
+  header.append(meta, closeBtn);
+
+  const body = el("div", { class: "modal__body" }, []);
+  const footer = el("div", { class: "modal__footer" }, []);
+  const cancelBtn = el("button", { class: "btn", type: "button" }, [el("span", { text: "Cancel" })]);
+  const primaryBtn = el("button", { class: "btn", type: "button" }, [el("span", { text: "" })]);
+  footer.append(cancelBtn, primaryBtn);
+
+  panel.append(header, body, footer);
+  root.append(backdrop, panel);
+
+  let isOpen = false;
+  let openerEl = null;
+  let savedScrollY = 0;
+  let savedBodyOverflow = "";
+  let savedBodyPaddingRight = "";
+  let requestEpoch = 0;
+  let primaryAction = null;
+
+  function lockBodyScroll() {
+    savedScrollY = window.scrollY;
+    savedBodyOverflow = document.body.style.overflow;
+    savedBodyPaddingRight = document.body.style.paddingRight;
+    const gap = window.innerWidth - document.documentElement.clientWidth;
+    document.body.classList.add("overlay-open");
+    document.body.style.overflow = "hidden";
+    if (gap > 0) {
+      document.body.style.paddingRight = `${gap}px`;
+    }
+  }
+
+  function unlockBodyScroll() {
+    document.body.classList.remove("overlay-open");
+    document.body.style.overflow = savedBodyOverflow;
+    document.body.style.paddingRight = savedBodyPaddingRight;
+    requestAnimationFrame(() => window.scrollTo(0, savedScrollY));
+  }
+
+  function describeFileOpsError(err) {
+    const code = err?.code ? String(err.code) : "UNKNOWN";
+    const msg = err?.message ? String(err.message) : "Unknown error";
+    const hints = {
+      SANDBOX_VIOLATION: "路径越界：只能操作 MediaRoot 内的相对路径。",
+      ROOT_FORBIDDEN: "禁止对 MediaRoot 根目录执行此操作。",
+      DST_EXISTS: "目标已存在：请更换目标路径或先处理同名文件。",
+      DST_PARENT_MISSING: "目标目录不存在：可勾选“Create parents”自动创建。",
+      DST_PARENT_NOT_DIR: "目标父路径不是文件夹。",
+      INVALID_MOVE: "无效移动：不能把文件夹移动到自身内部。",
+      STALE_CONFIRM_TOKEN: "文件状态已变化：请重新打开窗口获取最新确认信息。",
+      STAT_FAILED: "读取文件信息失败：可能已被删除或权限不足。",
+    };
+    const hint = hints[code] || "";
+    return { code, msg, hint };
+  }
+
+  function renderKv(labelText, valueText, { mono = false } = {}) {
+    const valueAttrs = { class: mono ? "modal__value modal__value--mono" : "modal__value", text: valueText };
+    return el("div", { class: "modal__kv" }, [
+      el("div", { class: "modal__label", text: labelText }),
+      el("div", valueAttrs),
+    ]);
+  }
+
+  function renderErrorBox(err) {
+    const { code, msg, hint } = describeFileOpsError(err);
+    const heading = hint || "操作失败。";
+    return el("div", { class: "modal-error" }, [
+      el("div", { class: "modal-error__title", text: heading }),
+      el("pre", { class: "modal-error__detail", text: `${code}: ${msg}` }),
+    ]);
+  }
+
+  function openBase({ nextTitle, nextSubtitle, opener } = {}) {
+    requestEpoch += 1;
+    openerEl = opener instanceof HTMLElement ? opener : document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    title.textContent = String(nextTitle || "");
+    subtitle.textContent = String(nextSubtitle || "");
+    body.replaceChildren();
+    cancelBtn.disabled = false;
+    primaryBtn.disabled = true;
+    primaryBtn.classList.remove("btn--danger");
+    primaryBtn.querySelector("span").textContent = "";
+    primaryAction = null;
+
+    if (!isOpen) {
+      lockBodyScroll();
+      isOpen = true;
+      root.classList.add("is-open");
+      root.setAttribute("aria-hidden", "false");
+    }
+    closeBtn.focus({ preventScroll: true });
+    return requestEpoch;
+  }
+
+  function close({ restoreScroll = true, restoreFocus = true } = {}) {
+    if (!isOpen) return;
+    requestEpoch += 1;
+    isOpen = false;
+    root.classList.remove("is-open");
+    root.setAttribute("aria-hidden", "true");
+    primaryAction = null;
+    body.replaceChildren();
+    if (restoreScroll) {
+      unlockBodyScroll();
+    } else {
+      document.body.classList.remove("overlay-open");
+      document.body.style.overflow = savedBodyOverflow;
+      document.body.style.paddingRight = savedBodyPaddingRight;
+    }
+    if (restoreFocus && openerEl) {
+      openerEl.focus({ preventScroll: true });
+    }
+    openerEl = null;
+  }
+
+  function setBusy(isBusy) {
+    cancelBtn.disabled = isBusy;
+    closeBtn.disabled = isBusy;
+    backdrop.disabled = isBusy;
+    if (!isBusy) return;
+    primaryBtn.disabled = true;
+  }
+
+  async function openDelete({ relPath, opener, onDone } = {}) {
+    const srcRelPath = String(relPath || "");
+    if (!srcRelPath) return;
+
+    const req = openBase({ nextTitle: "Delete", nextSubtitle: shortenText(srcRelPath, 64), opener });
+    cancelBtn.querySelector("span").textContent = "Cancel";
+    primaryBtn.querySelector("span").textContent = "Delete";
+    primaryBtn.classList.add("btn--danger");
+    body.replaceChildren(el("div", { class: "modal__hint", text: "Loading preview…" }));
+
+    let confirmToken = "";
+    try {
+      const data = await postJson(API.delete, { path: srcRelPath });
+      if (!isOpen || req !== requestEpoch) return;
+
+      const preview = data?.preview && typeof data.preview === "object" ? data.preview : {};
+      confirmToken = typeof data?.confirm_token === "string" ? data.confirm_token : "";
+
+      const parts = [
+        el("div", { class: "modal__text", text: "确认删除以下内容？删除后将无法恢复。" }),
+        renderKv("Source", preview.src_rel_path ? String(preview.src_rel_path) : srcRelPath, { mono: true }),
+        renderKv("Type", preview.is_dir ? "Folder" : "File"),
+      ];
+      if (!preview.is_dir) {
+        parts.push(renderKv("Size", formatBytes(preview.size_bytes)));
+      }
+      parts.push(renderKv("Modified", formatDateTime(preview.mtime_ms)));
+      body.replaceChildren(...parts);
+
+      primaryBtn.disabled = !confirmToken;
+      primaryAction = async () => {
+        if (!confirmToken) return;
+        const execReq = (requestEpoch += 1);
+        setBusy(true);
+        body.append(el("div", { class: "modal__hint", text: "Deleting…" }));
+        try {
+          await postJson(API.delete, { path: srcRelPath, confirm: true, confirm_token: confirmToken });
+          if (!isOpen || execReq !== requestEpoch) return;
+          close({ restoreScroll: true, restoreFocus: true });
+          onDone?.();
+	        } catch (err) {
+	          if (!isOpen || execReq !== requestEpoch) return;
+	          setBusy(false);
+	          body.append(renderErrorBox(err));
+	          primaryBtn.disabled = false;
+	        }
+	      };
+      primaryBtn.focus({ preventScroll: true });
+    } catch (err) {
+      if (!isOpen || req !== requestEpoch) return;
+      body.replaceChildren(renderErrorBox(err));
+      primaryBtn.disabled = true;
+    }
+  }
+
+  async function openMove({ relPath, opener, onDone } = {}) {
+    const srcRelPath = String(relPath || "");
+    if (!srcRelPath) return;
+
+    const req = openBase({ nextTitle: "Move", nextSubtitle: shortenText(srcRelPath, 64), opener });
+    cancelBtn.querySelector("span").textContent = "Cancel";
+    primaryBtn.querySelector("span").textContent = "Move";
+
+    const dstInput = el("input", {
+      class: "modal__input",
+      type: "text",
+      value: "",
+      placeholder: srcRelPath,
+      spellcheck: "false",
+      autocomplete: "off",
+    });
+    const createParents = el("input", { type: "checkbox" }, []);
+    const previewHost = el("div", { class: "modal__preview" }, [el("div", { class: "modal__hint", text: "输入目标路径后将自动校验预览。" })]);
+
+    body.replaceChildren(
+      el("div", { class: "modal__text", text: "请输入目标路径（相对 MediaRoot）。确认后将移动文件/文件夹。" }),
+      renderKv("Source", srcRelPath, { mono: true }),
+      el("div", { class: "modal__kv" }, [
+        el("div", { class: "modal__label", text: "Destination" }),
+        dstInput,
+        el("div", { class: "modal__hint", text: "例：archive/2025/" + (basename(srcRelPath) || "file.ext") }),
+      ]),
+      el("label", { class: "modal__checkbox" }, [
+        createParents,
+        el("span", { text: "Create parents" }),
+      ]),
+      previewHost,
+    );
+
+    let previewTimeout = null;
+    let movePreviewToken = "";
+    let lastPreviewKey = "";
+    let previewSeq = 0;
+
+    function currentKey() {
+      const dst = String(dstInput.value || "").trim();
+      return JSON.stringify({ src: srcRelPath, dst, create_parents: createParents.checked });
+    }
+
+    function clearPreview() {
+      movePreviewToken = "";
+      lastPreviewKey = "";
+      primaryBtn.disabled = true;
+    }
+
+	    async function refreshPreview() {
+	      if (!isOpen || req !== requestEpoch) return;
+	      const dstRelPath = String(dstInput.value || "").trim();
+	      const createParentsValue = Boolean(createParents.checked);
+	      const key = currentKey();
+	      clearPreview();
+
+      if (!dstRelPath) {
+        previewHost.replaceChildren(el("div", { class: "modal__hint", text: "请输入目标路径。" }));
+        return;
+      }
+      if (normalizeRelPathLike(dstRelPath) === normalizeRelPathLike(srcRelPath)) {
+        previewHost.replaceChildren(el("div", { class: "modal__hint", text: "目标路径不能与源相同。" }));
+        return;
+      }
+
+      const seq = (previewSeq += 1);
+      previewHost.replaceChildren(el("div", { class: "modal__hint", text: "Validating…" }));
+      try {
+        const data = await postJson(API.move, { src: srcRelPath, dst: dstRelPath, create_parents: createParentsValue });
+        if (!isOpen || req !== requestEpoch || seq !== previewSeq) return;
+        const preview = data?.preview && typeof data.preview === "object" ? data.preview : {};
+        const token = typeof data?.confirm_token === "string" ? data.confirm_token : "";
+        if (!token) {
+          previewHost.replaceChildren(el("div", { class: "modal__hint", text: "Preview missing confirm token." }));
+          return;
+        }
+        movePreviewToken = token;
+        lastPreviewKey = key;
+
+        const parts = [
+          renderKv("Target", preview.dst_rel_path ? String(preview.dst_rel_path) : dstRelPath, { mono: true }),
+          renderKv("Type", preview.is_dir ? "Folder" : "File"),
+        ];
+        if (!preview.is_dir) {
+          parts.push(renderKv("Size", formatBytes(preview.size_bytes)));
+        }
+        parts.push(renderKv("Modified", formatDateTime(preview.mtime_ms)));
+        previewHost.replaceChildren(...parts);
+        primaryBtn.disabled = false;
+      } catch (err) {
+        if (!isOpen || req !== requestEpoch || seq !== previewSeq) return;
+        previewHost.replaceChildren(renderErrorBox(err));
+      }
+    }
+
+    function schedulePreview() {
+      if (!isOpen || req !== requestEpoch) return;
+      clearPreview();
+      if (previewTimeout) {
+        window.clearTimeout(previewTimeout);
+      }
+      previewTimeout = window.setTimeout(() => refreshPreview(), 260);
+    }
+
+    dstInput.addEventListener("input", () => schedulePreview());
+    createParents.addEventListener("change", () => schedulePreview());
+
+    primaryAction = async () => {
+      const dstRelPath = String(dstInput.value || "").trim();
+      const createParentsValue = Boolean(createParents.checked);
+      const key = currentKey();
+      if (!movePreviewToken || !dstRelPath || key !== lastPreviewKey) {
+        schedulePreview();
+        return;
+      }
+
+      const execReq = (requestEpoch += 1);
+      setBusy(true);
+      previewHost.append(el("div", { class: "modal__hint", text: "Moving…" }));
+      try {
+        await postJson(API.move, {
+          src: srcRelPath,
+          dst: dstRelPath,
+          create_parents: createParentsValue,
+          confirm: true,
+          confirm_token: movePreviewToken,
+        });
+        if (!isOpen || execReq !== requestEpoch) return;
+        close({ restoreScroll: true, restoreFocus: true });
+        onDone?.();
+      } catch (err) {
+        if (!isOpen || execReq !== requestEpoch) return;
+        setBusy(false);
+        previewHost.append(renderErrorBox(err));
+        clearPreview();
+      }
+    };
+
+    requestAnimationFrame(() => dstInput.focus({ preventScroll: true }));
+  }
+
+  function normalizeRelPathLike(value) {
+    return String(value || "")
+      .trim()
+      .replace(/\\\\/g, "/")
+      .replace(/^\\/+/, "")
+      .replace(/\\/+$/, "");
+  }
+
+  backdrop.addEventListener("click", () => close({ restoreScroll: true, restoreFocus: true }));
+  closeBtn.addEventListener("click", () => close({ restoreScroll: true, restoreFocus: true }));
+  cancelBtn.addEventListener("click", () => close({ restoreScroll: true, restoreFocus: true }));
+  primaryBtn.addEventListener("click", () => primaryAction?.());
+
+  document.addEventListener("keydown", (event) => {
+    if (!isOpen) return;
+    if (event.defaultPrevented) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close({ restoreScroll: true, restoreFocus: true });
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      primaryAction?.();
+    }
+  });
+
+  return {
+    root,
+    openDelete,
+    openMove,
+    close,
+    get isOpen() {
+      return isOpen;
+    },
+  };
+}
+
 function renderHome(_token) {
   const header = el("div", { class: "view-header" }, [
     el("div", {}, [
@@ -868,7 +1257,27 @@ function renderEmptyState(message) {
   return el("div", { class: "placeholder" }, [el("div", { text: message })]);
 }
 
-function renderAlbumsGrid(albums) {
+function renderFileOpsActions(relPath, { variant = "overlay" } = {}) {
+  const path = String(relPath || "");
+  const isInline = variant === "inline";
+  const containerClass = isInline ? "item-actions item-actions--inline" : "item-actions item-actions--overlay";
+  const moveLabel = isInline ? "Move" : "⇄";
+  const deleteLabel = isInline ? "Delete" : "🗑";
+  const moveClass = isInline ? "btn btn--sm" : "iconbtn";
+  const deleteClass = isInline ? "btn btn--sm btn--danger" : "iconbtn iconbtn--danger";
+  return el("div", { class: containerClass }, [
+    el("button", { class: moveClass, type: "button", title: "Move", "aria-label": "Move", "data-fileop": "move", "data-rel-path": path }, [
+      el("span", { text: moveLabel }),
+    ]),
+    el(
+      "button",
+      { class: deleteClass, type: "button", title: "Delete", "aria-label": "Delete", "data-fileop": "delete", "data-rel-path": path },
+      [el("span", { text: deleteLabel })],
+    ),
+  ]);
+}
+
+function renderAlbumsGrid(albums, { onFileOps } = {}) {
   if (!albums.length) return renderEmptyState("没有找到相册（Album）。");
 
   const grid = el(
@@ -884,14 +1293,27 @@ function renderAlbumsGrid(albums) {
       cover.frame.append(countBadge);
 
       const albumTitle = album.name || album.title || album.rel_path;
-      return el("button", { class: "album-card", type: "button", "data-album": album.rel_path, "data-title": albumTitle }, [
+      const shell = el("div", { class: "media-shell" }, []);
+      const openBtn = el("button", { class: "album-card", type: "button", "data-album": album.rel_path, "data-title": albumTitle }, [
         el("div", { class: "album-cover" }, [cover.frame]),
         el("div", { class: "album-title", text: albumTitle }),
         el("div", { class: "album-subtitle", title: album.rel_path, text: shortenText(album.rel_path, 44) }),
       ]);
+      shell.append(openBtn);
+      if (typeof onFileOps === "function") {
+        shell.append(renderFileOpsActions(album.rel_path, { variant: "overlay" }));
+      }
+      return shell;
     }),
   );
   grid.addEventListener("click", (event) => {
+    const fileBtn = event.target instanceof Element ? event.target.closest("button[data-fileop]") : null;
+    if (fileBtn && grid.contains(fileBtn)) {
+      const action = fileBtn.getAttribute("data-fileop") || "";
+      const relPath = fileBtn.getAttribute("data-rel-path") || "";
+      onFileOps?.({ action, relPath, opener: fileBtn });
+      return;
+    }
     const target = event.target instanceof Element ? event.target.closest("button[data-album]") : null;
     if (!target || !grid.contains(target)) return;
     const rel = target.getAttribute("data-album") || "";
@@ -902,7 +1324,7 @@ function renderAlbumsGrid(albums) {
   return grid;
 }
 
-function renderThumbGrid(items) {
+function renderThumbGrid(items, { onFileOps } = {}) {
   if (!items.length) return renderEmptyState("没有找到散图。");
   const relPaths = items.map((item) => item.rel_path);
   const grid = el(
@@ -912,10 +1334,23 @@ function renderThumbGrid(items) {
       const name = basename(item.rel_path) || item.rel_path;
       const thumb = createLazyThumb({ src: API.thumb(item.rel_path), alt: name });
       const caption = el("div", { class: "thumb-caption", title: item.rel_path, text: shortenText(name, 28) });
-      return el("button", { class: "thumb-tile", type: "button", "data-index": String(i) }, [thumb.frame, caption]);
+      const shell = el("div", { class: "media-shell" }, []);
+      const openBtn = el("button", { class: "thumb-tile", type: "button", "data-index": String(i) }, [thumb.frame, caption]);
+      shell.append(openBtn);
+      if (typeof onFileOps === "function") {
+        shell.append(renderFileOpsActions(item.rel_path, { variant: "overlay" }));
+      }
+      return shell;
     }),
   );
   grid.addEventListener("click", (event) => {
+    const fileBtn = event.target instanceof Element ? event.target.closest("button[data-fileop]") : null;
+    if (fileBtn && grid.contains(fileBtn)) {
+      const action = fileBtn.getAttribute("data-fileop") || "";
+      const relPath = fileBtn.getAttribute("data-rel-path") || "";
+      onFileOps?.({ action, relPath, opener: fileBtn });
+      return;
+    }
     const target = event.target instanceof Element ? event.target.closest("button[data-index]") : null;
     if (!target || !grid.contains(target)) return;
     const idx = Number.parseInt(target.getAttribute("data-index") || "", 10);
@@ -926,7 +1361,7 @@ function renderThumbGrid(items) {
   return grid;
 }
 
-function renderVideosGrid(items) {
+function renderVideosGrid(items, { onFileOps } = {}) {
   if (!items.length) return renderEmptyState("没有找到视频文件。");
   const grid = el(
     "div",
@@ -944,14 +1379,27 @@ function renderVideosGrid(items) {
         el("span", { text: formatBytes(item.size_bytes) }),
         el("span", { text: item.folder_rel_path ? item.folder_rel_path : "/" }),
       ]);
-      return el("button", { class: "video-card", type: "button", "data-index": String(i) }, [
+      const shell = el("div", { class: "media-shell" }, []);
+      const openBtn = el("button", { class: "video-card", type: "button", "data-index": String(i) }, [
         el("div", { class: "video-cover" }, [thumb.frame]),
         title,
         meta,
       ]);
+      shell.append(openBtn);
+      if (typeof onFileOps === "function") {
+        shell.append(renderFileOpsActions(item.rel_path, { variant: "overlay" }));
+      }
+      return shell;
     }),
   );
   grid.addEventListener("click", (event) => {
+    const fileBtn = event.target instanceof Element ? event.target.closest("button[data-fileop]") : null;
+    if (fileBtn && grid.contains(fileBtn)) {
+      const action = fileBtn.getAttribute("data-fileop") || "";
+      const relPath = fileBtn.getAttribute("data-rel-path") || "";
+      onFileOps?.({ action, relPath, opener: fileBtn });
+      return;
+    }
     const target = event.target instanceof Element ? event.target.closest("button[data-index]") : null;
     if (!target || !grid.contains(target)) return;
     const idx = Number.parseInt(target.getAttribute("data-index") || "", 10);
@@ -962,8 +1410,9 @@ function renderVideosGrid(items) {
   return grid;
 }
 
-function renderFileTable(items, { emptyMessage } = {}) {
+function renderFileTable(items, { emptyMessage, onFileOps } = {}) {
   if (!items.length) return renderEmptyState(emptyMessage || "没有文件。");
+  const showActions = typeof onFileOps === "function";
 
   const header = el("tr", {}, [
     el("th", { text: "Name" }),
@@ -971,19 +1420,34 @@ function renderFileTable(items, { emptyMessage } = {}) {
     el("th", { text: "Ext" }),
     el("th", { class: "cell--num", text: "Size" }),
     el("th", { text: "Modified" }),
+    ...(showActions ? [el("th", { class: "cell--actions", text: "Actions" })] : []),
   ]);
 
-  const rows = items.map((item) =>
-    el("tr", {}, [
+  const rows = items.map((item) => {
+    const cells = [
       el("td", { class: "cell--path", title: item.rel_path, text: basename(item.rel_path) || item.rel_path }),
       el("td", { class: "cell--path", title: item.folder_rel_path || "", text: item.folder_rel_path || "/" }),
       el("td", { text: item.ext || "" }),
       el("td", { class: "cell--num", text: formatBytes(item.size_bytes) }),
       el("td", { text: formatDateTime(item.mtime_ms) }),
-    ]),
-  );
+    ];
+    if (showActions) {
+      cells.push(el("td", { class: "cell--actions" }, [renderFileOpsActions(item.rel_path, { variant: "inline" })]));
+    }
+    return el("tr", {}, cells);
+  });
 
-  return el("table", { class: "file-table" }, [el("thead", {}, [header]), el("tbody", {}, rows)]);
+  const table = el("table", { class: "file-table" }, [el("thead", {}, [header]), el("tbody", {}, rows)]);
+  if (showActions) {
+    table.addEventListener("click", (event) => {
+      const fileBtn = event.target instanceof Element ? event.target.closest("button[data-fileop]") : null;
+      if (!fileBtn || !table.contains(fileBtn)) return;
+      const action = fileBtn.getAttribute("data-fileop") || "";
+      const relPath = fileBtn.getAttribute("data-rel-path") || "";
+      onFileOps?.({ action, relPath, opener: fileBtn });
+    });
+  }
+  return table;
 }
 
 function renderCategory(category, token) {
@@ -1001,9 +1465,9 @@ function renderCategory(category, token) {
 
   main.replaceChildren(header, metaHost, bodyHost);
 
-  let requestEpoch = 0;
-  const load = async ({ refresh = false } = {}) => {
-    const req = (requestEpoch += 1);
+	let requestEpoch = 0;
+	const load = async ({ refresh = false } = {}) => {
+	  const req = (requestEpoch += 1);
 
     metaHost.replaceChildren(
       renderMetaBar({
@@ -1019,10 +1483,10 @@ function renderCategory(category, token) {
     try {
       const refreshParam = refresh ? "?refresh=1" : "";
 
-      if (category.key === "images") {
-        const data = await fetchJson(`${API.albums}${refreshParam}`);
-        if (token !== renderEpoch || req !== requestEpoch) return;
-        const albums = Array.isArray(data.items) ? data.items : [];
+	      if (category.key === "images") {
+	        const data = await fetchJson(`${API.albums}${refreshParam}`);
+	        if (token !== renderEpoch || req !== requestEpoch) return;
+	        const albums = Array.isArray(data.items) ? data.items : [];
         metaHost.replaceChildren(
           renderMetaBar({
             badges: [
@@ -1030,17 +1494,17 @@ function renderCategory(category, token) {
               { label: "Scanned", value: formatDateTime(data.scanned_at_ms) },
               { label: "MediaRoot", value: shortenText(data.media_root, 44), title: data.media_root },
             ],
-            onRefresh: () => load({ refresh: true }),
-          }),
-        );
-        bodyHost.replaceChildren(renderAlbumsGrid(albums));
-        return;
-      }
+	            onRefresh: () => load({ refresh: true }),
+	          }),
+	        );
+	        bodyHost.replaceChildren(renderAlbumsGrid(albums, { onFileOps: openFileOps }));
+	        return;
+	      }
 
-      if (category.key === "scattered") {
-        const data = await fetchJson(`${API.scattered}${refreshParam}`);
-        if (token !== renderEpoch || req !== requestEpoch) return;
-        const items = Array.isArray(data.items) ? data.items : [];
+	      if (category.key === "scattered") {
+	        const data = await fetchJson(`${API.scattered}${refreshParam}`);
+	        if (token !== renderEpoch || req !== requestEpoch) return;
+	        const items = Array.isArray(data.items) ? data.items : [];
         metaHost.replaceChildren(
           renderMetaBar({
             badges: [
@@ -1048,17 +1512,17 @@ function renderCategory(category, token) {
               { label: "Scanned", value: formatDateTime(data.scanned_at_ms) },
               { label: "MediaRoot", value: shortenText(data.media_root, 44), title: data.media_root },
             ],
-            onRefresh: () => load({ refresh: true }),
-          }),
-        );
-        bodyHost.replaceChildren(renderThumbGrid(items));
-        return;
-      }
+	            onRefresh: () => load({ refresh: true }),
+	          }),
+	        );
+	        bodyHost.replaceChildren(renderThumbGrid(items, { onFileOps: openFileOps }));
+	        return;
+	      }
 
-      if (category.key === "videos") {
-        const data = await fetchJson(`${API.videos}${refreshParam}`);
-        if (token !== renderEpoch || req !== requestEpoch) return;
-        const items = Array.isArray(data.items) ? data.items : [];
+	      if (category.key === "videos") {
+	        const data = await fetchJson(`${API.videos}${refreshParam}`);
+	        if (token !== renderEpoch || req !== requestEpoch) return;
+	        const items = Array.isArray(data.items) ? data.items : [];
         metaHost.replaceChildren(
           renderMetaBar({
             badges: [
@@ -1066,12 +1530,12 @@ function renderCategory(category, token) {
               { label: "Scanned", value: formatDateTime(data.scanned_at_ms) },
               { label: "MediaRoot", value: shortenText(data.media_root, 44), title: data.media_root },
             ],
-            onRefresh: () => load({ refresh: true }),
-          }),
-        );
-        bodyHost.replaceChildren(renderVideosGrid(items));
-        return;
-      }
+	            onRefresh: () => load({ refresh: true }),
+	          }),
+	        );
+	        bodyHost.replaceChildren(renderVideosGrid(items, { onFileOps: openFileOps }));
+	        return;
+	      }
 
       if (category.key === "games" || category.key === "others") {
         const data = await fetchJson(`${API.others}${refreshParam}`);
@@ -1079,20 +1543,20 @@ function renderCategory(category, token) {
         const games = Array.isArray(data.games) ? data.games : [];
         const others = Array.isArray(data.others) ? data.others : [];
 
-        if (category.key === "games") {
-          metaHost.replaceChildren(
-            renderMetaBar({
-              badges: [
+	        if (category.key === "games") {
+	          metaHost.replaceChildren(
+	            renderMetaBar({
+	              badges: [
                 { label: "Games", value: String(games.length) },
                 { label: "Scanned", value: formatDateTime(data.scanned_at_ms) },
                 { label: "MediaRoot", value: shortenText(data.media_root, 44), title: data.media_root },
               ],
-              onRefresh: () => load({ refresh: true }),
-            }),
-          );
-          bodyHost.replaceChildren(renderFileTable(games, { emptyMessage: "没有找到游戏文件。" }));
-          return;
-        }
+	              onRefresh: () => load({ refresh: true }),
+	            }),
+	          );
+	          bodyHost.replaceChildren(renderFileTable(games, { emptyMessage: "没有找到游戏文件。", onFileOps: openFileOps }));
+	          return;
+	        }
 
         metaHost.replaceChildren(
           renderMetaBar({
@@ -1101,12 +1565,12 @@ function renderCategory(category, token) {
               { label: "Scanned", value: formatDateTime(data.scanned_at_ms) },
               { label: "MediaRoot", value: shortenText(data.media_root, 44), title: data.media_root },
             ],
-            onRefresh: () => load({ refresh: true }),
-          }),
-        );
-        bodyHost.replaceChildren(renderFileTable(others, { emptyMessage: "没有找到其他文件。" }));
-        return;
-      }
+	            onRefresh: () => load({ refresh: true }),
+	          }),
+	        );
+	        bodyHost.replaceChildren(renderFileTable(others, { emptyMessage: "没有找到其他文件。", onFileOps: openFileOps }));
+	        return;
+	      }
 
       bodyHost.replaceChildren(renderEmptyState("该视图尚未实现。"));
     } catch (err) {
@@ -1122,10 +1586,30 @@ function renderCategory(category, token) {
       );
       bodyHost.replaceChildren(renderErrorState(err, { onRetry: () => load({ refresh: false }) }));
     }
-  };
+	  };
 
-  load({ refresh: false });
-}
+	  const openFileOps = ({ action, relPath, opener } = {}) => {
+	    const nextAction = String(action || "");
+	    const nextRelPath = String(relPath || "");
+	    if (!nextRelPath) return;
+	    if (token !== renderEpoch) return;
+
+	    const refreshAfter = () => {
+	      if (token !== renderEpoch) return;
+	      load({ refresh: true });
+	    };
+
+	    if (nextAction === "delete") {
+	      fileOpsDialog.openDelete({ relPath: nextRelPath, opener, onDone: refreshAfter });
+	      return;
+	    }
+	    if (nextAction === "move") {
+	      fileOpsDialog.openMove({ relPath: nextRelPath, opener, onDone: refreshAfter });
+	    }
+	  };
+
+	  load({ refresh: false });
+	}
 
 function renderNotFound(_token) {
   const header = el("div", { class: "view-header" }, [
