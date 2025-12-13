@@ -96,7 +96,33 @@ class TestSandbox(unittest.TestCase):
             with self.assertRaises(SandboxViolation):
                 sandbox.to_abs_path("sym/file.txt")
 
+    def test_to_abs_path_allow_missing_accepts_new_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "MediaRoot"
+            root.mkdir()
+
+            sandbox = MediaRootSandbox(root)
+            abs_path = sandbox.to_abs_path_allow_missing("newdir/file.txt")
+            self.assertEqual(abs_path, root / "newdir" / "file.txt")
+
+    def test_to_abs_path_allow_missing_rejects_existing_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "MediaRoot"
+            outside = base / "Outside"
+            root.mkdir()
+            outside.mkdir()
+
+            link = root / "sym"
+            try:
+                os.symlink(outside, link, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlink not supported in this environment")
+
+            sandbox = MediaRootSandbox(root)
+            with self.assertRaises(SandboxViolation):
+                sandbox.to_abs_path_allow_missing("sym/newdir")
+
 
 if __name__ == "__main__":
     unittest.main()
-

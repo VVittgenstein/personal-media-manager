@@ -88,6 +88,25 @@ class MediaRootSandbox:
         self._reject_reparse_traversal(abs_path)
         return abs_path
 
+    def to_abs_path_allow_missing(self, rel_path: str) -> Path:
+        """Convert a normalized relative path to an absolute path within MediaRoot.
+
+        Unlike `to_abs_path`, this method allows the final path (and/or deeper
+        segments) to be missing on disk. It still validates that any existing
+        prefix segments do not traverse symlinks/reparse points.
+        """
+
+        rel_path = normalize_rel_path(rel_path)
+        if rel_path == "":
+            return self.media_root
+
+        abs_path = self.media_root.joinpath(*rel_path.split("/"))
+        if not _is_within_root(root=self.media_root, path=abs_path):
+            raise SandboxViolation("path escapes MediaRoot by string prefix check")
+
+        self._reject_reparse_traversal_allow_missing(abs_path)
+        return abs_path
+
     def _reject_reparse_traversal(self, abs_path: Path) -> None:
         root_abs = self._root_abs
         target_abs = Path(_norm_case_abs(abs_path))
@@ -116,3 +135,32 @@ class MediaRootSandbox:
         if not _is_within_root(root=self.media_root, path=resolved):
             raise SandboxViolation("path resolves outside MediaRoot")
 
+    def _reject_reparse_traversal_allow_missing(self, abs_path: Path) -> None:
+        root_abs = self._root_abs
+        target_abs = Path(_norm_case_abs(abs_path))
+
+        try:
+            rel = target_abs.relative_to(root_abs)
+        except ValueError as exc:
+            raise SandboxViolation("path escapes MediaRoot") from exc
+
+        current = root_abs
+        for part in rel.parts:
+            current = current / part
+            try:
+                st = os.stat(current, follow_symlinks=False)
+            except FileNotFoundError:
+                break
+            except OSError as exc:
+                raise SandboxViolation(f"cannot stat path segment: {current}") from exc
+
+            if os.path.islink(current) or _is_reparse_point(st):
+                raise SandboxViolation(f"reparse/symlink segment is not allowed: {current}")
+
+        try:
+            resolved = abs_path.resolve(strict=True)
+        except OSError:
+            return
+
+        if not _is_within_root(root=self.media_root, path=resolved):
+            raise SandboxViolation("path resolves outside MediaRoot")

@@ -7,9 +7,26 @@ from pathlib import Path
 
 from backend.api.server import _Handler, _IndexCache, _MediaApiServer
 from backend.indexing.media_types import MediaTypes
+from backend.security.fileops import FileOpsService
+from backend.security.operation_log import OperationLogStore
 
 
 class TestApiServer(unittest.TestCase):
+    def _post_json(self, conn: HTTPConnection, path: str, payload: dict) -> tuple[int, dict]:
+        body = json.dumps(payload).encode("utf-8")
+        conn.request(
+            "POST",
+            path,
+            body=body,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(len(body)),
+            },
+        )
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode("utf-8"))
+        return resp.status, data
+
     def test_endpoints_return_expected_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "MediaRoot"
@@ -26,6 +43,11 @@ class TestApiServer(unittest.TestCase):
 
             server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
             server.index_cache = cache
+            server.fileops = FileOpsService(
+                media_root=root,
+                log_store=OperationLogStore(path=Path(tmp) / "oplog.jsonl"),
+                confirm_secret=b"test-secret",
+            )
 
             t = threading.Thread(target=server.serve_forever, daemon=True)
             t.start()
@@ -64,7 +86,93 @@ class TestApiServer(unittest.TestCase):
                 server.server_close()
                 t.join(timeout=2)
 
+    def test_fileops_delete_and_move_require_confirm_and_write_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "MediaRoot"
+            root.mkdir(parents=True)
+            (root / "a.txt").write_text("hello", encoding="utf-8")
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            log_path = tmp_path / "operation-log.jsonl"
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+            server.fileops = FileOpsService(
+                media_root=root,
+                log_store=OperationLogStore(path=log_path),
+                confirm_secret=b"test-secret",
+            )
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=2)
+
+            try:
+                status, preview = self._post_json(conn, "/api/move", {})
+                self.assertEqual(status, 400)
+                self.assertIn("error", preview)
+
+                status, preview = self._post_json(
+                    conn,
+                    "/api/move",
+                    {"src": "a.txt", "dst": "moved/a.txt", "create_parents": True},
+                )
+                self.assertEqual(status, 200)
+                self.assertTrue(preview.get("confirm_required"))
+                token = preview.get("confirm_token")
+                self.assertIsInstance(token, str)
+
+                status, moved = self._post_json(
+                    conn,
+                    "/api/move",
+                    {
+                        "src": "a.txt",
+                        "dst": "moved/a.txt",
+                        "create_parents": True,
+                        "confirm": True,
+                        "confirm_token": token,
+                    },
+                )
+                self.assertEqual(status, 200)
+                self.assertTrue(moved.get("executed"))
+                self.assertTrue((root / "moved" / "a.txt").exists())
+
+                status, del_preview = self._post_json(
+                    conn,
+                    "/api/delete",
+                    {"path": "moved/a.txt"},
+                )
+                self.assertEqual(status, 200)
+                del_token = del_preview.get("confirm_token")
+                self.assertIsInstance(del_token, str)
+
+                status, deleted = self._post_json(
+                    conn,
+                    "/api/delete",
+                    {"path": "moved/a.txt", "confirm": True, "confirm_token": del_token},
+                )
+                self.assertEqual(status, 200)
+                self.assertTrue(deleted.get("executed"))
+                self.assertFalse((root / "moved" / "a.txt").exists())
+
+                lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+                self.assertGreaterEqual(len(lines), 2)
+                last = json.loads(lines[-1])
+                self.assertEqual(last.get("op"), "delete")
+                self.assertTrue(last.get("success"))
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
 
 if __name__ == "__main__":
     unittest.main()
-

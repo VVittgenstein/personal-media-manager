@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -11,6 +12,8 @@ from urllib.parse import parse_qs, urlparse
 
 from backend.indexing.media_index import MediaIndex, build_media_index
 from backend.indexing.media_types import MediaTypes, load_media_types
+from backend.security.fileops import FileOpsError, FileOpsService
+from backend.security.operation_log import OperationLogStore
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,7 @@ class _IndexCache:
 
 class _MediaApiServer(ThreadingHTTPServer):
     index_cache: _IndexCache
+    fileops: FileOpsService
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -71,7 +75,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -140,6 +144,57 @@ class _Handler(BaseHTTPRequestHandler):
 
         self._send_error(404, "NOT_FOUND", f"unknown endpoint: {path}")
 
+    def _read_json_body(self) -> dict[str, Any]:
+        length_raw = self.headers.get("Content-Length", "0")
+        try:
+            length = int(length_raw)
+        except ValueError:
+            raise FileOpsError("INVALID_CONTENT_LENGTH", "invalid Content-Length header")
+
+        if length <= 0:
+            return {}
+
+        raw = self.rfile.read(length)
+        if not raw:
+            return {}
+
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise FileOpsError("INVALID_JSON", f"invalid JSON body: {exc}")
+        if not isinstance(data, dict):
+            raise FileOpsError("INVALID_JSON", "JSON body must be an object")
+        return data
+
+    def do_POST(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path not in {"/api/delete", "/api/move"}:
+            self._send_error(404, "NOT_FOUND", f"unknown endpoint: {path}")
+            return
+
+        try:
+            body = self._read_json_body()
+        except FileOpsError as exc:
+            self._send_error(exc.http_status, exc.code, exc.message)
+            return
+
+        try:
+            if path == "/api/delete":
+                result = self.server.fileops.delete(body)
+            else:
+                result = self.server.fileops.move(body)
+        except FileOpsError as exc:
+            self._send_error(exc.http_status, exc.code, exc.message)
+            return
+        except Exception as exc:
+            logger.exception("file operation failed: %s", exc)
+            self._send_error(500, "FILEOPS_FAILED", str(exc))
+            return
+
+        self._send_json(result.http_status, result.payload)
+
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.info("%s - %s", self.address_string(), fmt % args)
 
@@ -152,6 +207,7 @@ def run_server(
     include_trash: bool,
     media_types_config: str | Path | None,
     warm_index: bool,
+    operation_log_path: str | Path | None,
 ) -> None:
     media_types = load_media_types(media_types_config)
     cache = _IndexCache(
@@ -165,6 +221,13 @@ def run_server(
 
     server: _MediaApiServer = _MediaApiServer((host, port), _Handler)
     server.index_cache = cache
+    default_log_path = Path(__file__).resolve().parents[1] / "data" / "operation-log.jsonl"
+    log_store = OperationLogStore(path=operation_log_path or default_log_path)
+    server.fileops = FileOpsService(
+        media_root=cache.media_root,
+        log_store=log_store,
+        confirm_secret=secrets.token_bytes(32),
+    )
     logger.info("serving on http://%s:%s (MediaRoot=%s)", host, port, cache.media_root)
     server.serve_forever()
 
@@ -190,6 +253,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Do not build index on startup (default: warm index).",
     )
     parser.add_argument(
+        "--operation-log",
+        default=None,
+        help="Path to operation log JSONL (default: backend/data/operation-log.jsonl).",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Python logging level (default: INFO).",
@@ -205,6 +273,6 @@ def main(argv: list[str] | None = None) -> int:
         include_trash=args.include_trash,
         media_types_config=args.media_types_config,
         warm_index=not args.no_warm_index,
+        operation_log_path=args.operation_log,
     )
     return 0
-
