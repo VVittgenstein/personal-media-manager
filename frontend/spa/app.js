@@ -7,6 +7,18 @@ const API = {
   scattered: "/api/scattered",
   videos: "/api/videos",
   others: "/api/others",
+  search: (query, { limit = 50, types, refresh = false } = {}) => {
+    const params = new URLSearchParams();
+    params.set("q", String(query || ""));
+    params.set("limit", String(limit));
+    if (types) {
+      params.set("types", String(types));
+    }
+    if (refresh) {
+      params.set("refresh", "1");
+    }
+    return `/api/search?${params.toString()}`;
+  },
   thumb: (relPath) => `/api/thumb?path=${encodeURIComponent(relPath)}`,
   albumCover: (relPath) => `/api/album-cover?path=${encodeURIComponent(relPath)}`,
   videoMosaic: (relPath) => `/api/video-mosaic?path=${encodeURIComponent(relPath)}`,
@@ -69,7 +81,11 @@ const videoOverlay = createVideoOverlay();
 const fileOpsDialog = createFileOpsDialog();
 appRoot.append(imageOverlay.root, videoOverlay.root, fileOpsDialog.root);
 
+let globalSearch = null;
+let pendingSearchJump = null;
+
 function closeAllOverlays({ restoreScroll = false, restoreFocus = false } = {}) {
+  globalSearch?.close?.({ restoreFocus });
   imageOverlay.close({ restoreScroll, restoreFocus });
   videoOverlay.close({ restoreScroll, restoreFocus });
   fileOpsDialog.close({ restoreScroll, restoreFocus });
@@ -230,6 +246,39 @@ function shortenText(text, maxLen = 48) {
   return `${raw.slice(0, head)}…${raw.slice(-tail)}`;
 }
 
+function findByDataAttr(container, attr, value) {
+  if (!(container instanceof Element)) return null;
+  const targetValue = String(value || "");
+  if (!targetValue) return null;
+  const nodes = container.querySelectorAll(`[${attr}]`);
+  for (const node of nodes) {
+    if (node.getAttribute(attr) === targetValue) {
+      return node;
+    }
+  }
+  return null;
+}
+
+function focusSearchTarget(target, { durationMs = 1400 } = {}) {
+  if (!(target instanceof HTMLElement)) return;
+
+  target.scrollIntoView({ block: "center", inline: "nearest" });
+  target.focus({ preventScroll: true });
+  target.classList.remove("is-search-focus");
+  // Restart animation in case the same element is focused repeatedly.
+  void target.offsetWidth;
+  target.classList.add("is-search-focus");
+  window.setTimeout(() => target.classList.remove("is-search-focus"), durationMs);
+}
+
+function takePendingSearchJump(pathname) {
+  const expected = String(pathname || "");
+  const jump = pendingSearchJump;
+  if (!jump || jump.pathname !== expected) return null;
+  pendingSearchJump = null;
+  return jump;
+}
+
 function ensureLazyObserver() {
   if (!("IntersectionObserver" in window)) return null;
   if (lazyImageObserver) return lazyImageObserver;
@@ -317,6 +366,306 @@ async function postJson(url, body) {
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+function normalizeSearchQuery(query) {
+  return String(query || "")
+    .trim()
+    .replaceAll("\\", "/")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ");
+}
+
+function isEditableTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+function setupGlobalSearch() {
+  const form = document.getElementById("global-search-form");
+  const input = document.getElementById("global-search-input");
+  const clearBtn = document.getElementById("global-search-clear");
+  const resultsHost = document.getElementById("global-search-results");
+
+  if (!form || !input || !clearBtn || !resultsHost) {
+    return { close: () => {}, clear: () => {}, focus: () => {} };
+  }
+
+  const KIND_LABELS = {
+    album: "Album",
+    image: "Image",
+    video: "Video",
+    game: "Game",
+    other: "Other",
+  };
+
+  let requestEpoch = 0;
+  let debounceTimer = 0;
+  let lastQuery = "";
+  let lastItems = [];
+
+  const updateClear = () => {
+    clearBtn.hidden = String(input.value || "").trim().length === 0;
+  };
+
+  const close = ({ restoreFocus = false } = {}) => {
+    requestEpoch += 1;
+    if (debounceTimer) {
+      window.clearTimeout(debounceTimer);
+      debounceTimer = 0;
+    }
+    lastQuery = "";
+    lastItems = [];
+    resultsHost.replaceChildren();
+    resultsHost.hidden = true;
+    form.classList.remove("is-open");
+    if (restoreFocus) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && form.contains(active)) {
+        main.focus({ preventScroll: true });
+      }
+    }
+  };
+
+  const open = () => {
+    resultsHost.hidden = false;
+    form.classList.add("is-open");
+  };
+
+  const clear = () => {
+    input.value = "";
+    updateClear();
+    close({ restoreFocus: false });
+  };
+
+  const renderHint = (title, detail = "") =>
+    el("div", { class: "search-results__hint" }, [
+      el("div", { class: "search-results__hint-title", text: title }),
+      ...(detail ? [el("div", { class: "search-results__hint-detail", text: detail })] : []),
+    ]);
+
+  const renderMeta = ({ query, count, tookMs }) =>
+    el("div", { class: "search-results__meta" }, [
+      el("div", { class: "search-results__meta-title", text: "Search results" }),
+      el(
+        "div",
+        { class: "search-results__meta-sub", text: `${count} · ${tookMs}ms · ${shortenText(query, 44)}` },
+        [],
+      ),
+    ]);
+
+  const renderItem = (item, index) => {
+    const kind = typeof item?.kind === "string" ? item.kind : "";
+    const relPath = typeof item?.rel_path === "string" ? item.rel_path : "";
+    const name = kind === "album" ? String(item?.name || basename(relPath) || relPath) : basename(relPath) || relPath;
+
+    const metaParts = [];
+    const extraParts = [];
+    if (kind === "album") {
+      const count = Number.isFinite(Number(item?.image_count)) ? Number(item.image_count) : null;
+      metaParts.push(count === null ? "album" : `${count} images`);
+      extraParts.push(relPath);
+    } else {
+      if (typeof item?.ext === "string" && item.ext) metaParts.push(item.ext);
+      if (item?.size_bytes !== undefined && item?.size_bytes !== null) metaParts.push(formatBytes(item.size_bytes));
+      if (typeof item?.folder_rel_path === "string" && item.folder_rel_path) {
+        extraParts.push(item.folder_rel_path);
+      } else {
+        extraParts.push("/");
+      }
+      if (kind === "image" && typeof item?.album_rel_path === "string" && item.album_rel_path) {
+        metaParts.push(`album: ${shortenText(item.album_rel_path, 28)}`);
+      }
+    }
+
+    return el("button", { class: "search-item", type: "button", "data-index": String(index) }, [
+      el("div", { class: "search-item__badge", text: KIND_LABELS[kind] || kind || "?" }),
+      el("div", { class: "search-item__body" }, [
+        el("div", { class: "search-item__title", title: name, text: shortenText(name, 72) }),
+        el("div", { class: "search-item__sub", title: extraParts.join(" · "), text: shortenText(extraParts.join(" · "), 84) }),
+        ...(metaParts.length ? [el("div", { class: "search-item__meta", text: metaParts.join(" · ") })] : []),
+      ]),
+      el("div", { class: "search-item__chev", text: "↵" }),
+    ]);
+  };
+
+  const renderList = (query, data, items) => {
+    const tookMs = Number.isFinite(Number(data?.took_ms)) ? Number(data.took_ms) : 0;
+    if (!items.length) {
+      return el("div", {}, [renderMeta({ query, count: 0, tookMs }), renderHint("No matches", "Try another keyword.")]);
+    }
+    return el("div", {}, [
+      renderMeta({ query, count: items.length, tookMs }),
+      el(
+        "div",
+        { class: "search-results__list", role: "listbox", "aria-label": "Search results" },
+        items.map((item, idx) => renderItem(item, idx)),
+      ),
+    ]);
+  };
+
+  const scheduleSearch = (query) => {
+    lastQuery = query;
+    if (debounceTimer) {
+      window.clearTimeout(debounceTimer);
+    }
+    debounceTimer = window.setTimeout(() => runSearch(query), 160);
+  };
+
+  const runSearch = async (query) => {
+    const normalized = normalizeSearchQuery(query);
+    if (!normalized) {
+      close({ restoreFocus: false });
+      return;
+    }
+
+    const req = (requestEpoch += 1);
+    open();
+    resultsHost.replaceChildren(renderHint("Searching…"));
+
+    try {
+      const data = await fetchJson(API.search(normalized, { limit: 50 }));
+      if (req !== requestEpoch) return;
+      const items = Array.isArray(data?.items) ? data.items : [];
+      lastItems = items;
+      resultsHost.replaceChildren(renderList(normalized, data, items));
+    } catch (err) {
+      if (req !== requestEpoch) return;
+      const msg = err?.message ? String(err.message) : "Search failed.";
+      resultsHost.replaceChildren(renderHint("Search failed", msg));
+    }
+  };
+
+  const jumpForItem = (item) => {
+    const kind = typeof item?.kind === "string" ? item.kind : "";
+    const relPath = typeof item?.rel_path === "string" ? item.rel_path : "";
+    const albumRelPath = typeof item?.album_rel_path === "string" ? item.album_rel_path : "";
+    if (!kind || !relPath) return null;
+
+    if (kind === "album") {
+      return { pathname: "/images", kind, relPath, openOverlay: false, payload: item };
+    }
+    if (kind === "image") {
+      if (albumRelPath) {
+        return { pathname: "/images", kind, relPath, albumRelPath, openOverlay: true, payload: item };
+      }
+      return { pathname: "/scattered", kind, relPath, openOverlay: true, payload: item };
+    }
+    if (kind === "video") {
+      return { pathname: "/videos", kind, relPath, openOverlay: true, payload: item };
+    }
+    if (kind === "game") {
+      return { pathname: "/games", kind, relPath, openOverlay: false, payload: item };
+    }
+    if (kind === "other") {
+      return { pathname: "/others", kind, relPath, openOverlay: false, payload: item };
+    }
+    return null;
+  };
+
+  const selectItem = (item) => {
+    const jump = jumpForItem(item);
+    if (!jump) return;
+    pendingSearchJump = jump;
+    clear();
+    navigate(jump.pathname);
+  };
+
+  const selectFirst = () => {
+    if (lastItems.length) {
+      selectItem(lastItems[0]);
+      return;
+    }
+    const normalized = normalizeSearchQuery(input.value);
+    if (!normalized) return;
+    runSearch(normalized);
+  };
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    selectFirst();
+  });
+
+  input.addEventListener("input", () => {
+    updateClear();
+    const normalized = normalizeSearchQuery(input.value);
+    if (!normalized) {
+      close({ restoreFocus: false });
+      return;
+    }
+    scheduleSearch(normalized);
+  });
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      clear();
+      main.focus({ preventScroll: true });
+      return;
+    }
+    if (event.key === "Enter") {
+      if (!lastItems.length) return;
+      event.preventDefault();
+      selectItem(lastItems[0]);
+    }
+  });
+
+  clearBtn.addEventListener("click", () => {
+    clear();
+    input.focus({ preventScroll: true });
+  });
+
+  resultsHost.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("button[data-index]") : null;
+    if (!target || !resultsHost.contains(target)) return;
+    const idx = Number.parseInt(target.getAttribute("data-index") || "", 10);
+    if (!Number.isFinite(idx)) return;
+    const item = lastItems[idx];
+    if (!item) return;
+    selectItem(item);
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!form.classList.contains("is-open")) return;
+    const target = event.target instanceof Node ? event.target : null;
+    if (target && form.contains(target)) return;
+    close({ restoreFocus: false });
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    if (imageOverlay.isOpen || videoOverlay.isOpen || fileOpsDialog.isOpen) return;
+    if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      const target = event.target;
+      if (isEditableTarget(target)) return;
+      event.preventDefault();
+      input.focus({ preventScroll: true });
+      input.select();
+      return;
+    }
+
+    if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === "k") {
+      const target = event.target;
+      if (isEditableTarget(target) && target !== document.body) return;
+      event.preventDefault();
+      input.focus({ preventScroll: true });
+      input.select();
+    }
+  });
+
+  updateClear();
+
+  return {
+    close,
+    clear,
+    focus: () => {
+      input.focus({ preventScroll: true });
+      input.select();
+    },
+  };
 }
 
 function createImageOverlay() {
@@ -481,13 +830,23 @@ function createImageOverlay() {
     update();
   }
 
-  async function openAlbum({ albumRelPath, title: nextTitle, opener } = {}) {
+  async function openAlbum({ albumRelPath, title: nextTitle, opener, startIndex, startRelPath } = {}) {
     const rel = typeof albumRelPath === "string" ? albumRelPath.trim() : "";
     if (!rel) return;
 
+    const preferredRel = typeof startRelPath === "string" ? startRelPath.trim() : "";
+    const preferredIndex = Number.isFinite(Number(startIndex)) ? Number(startIndex) : 0;
+
     const cached = albumCache.get(rel);
     if (Array.isArray(cached) && cached.length) {
-      open({ relPaths: cached, startIndex: 0, title: nextTitle || rel, opener });
+      let resolvedIndex = preferredIndex;
+      if (preferredRel) {
+        const idx = cached.indexOf(preferredRel);
+        if (idx >= 0) {
+          resolvedIndex = idx;
+        }
+      }
+      open({ relPaths: cached, startIndex: resolvedIndex, title: nextTitle || rel, opener });
       return;
     }
 
@@ -507,7 +866,14 @@ function createImageOverlay() {
         return;
       }
       items = relPaths;
-      index = 0;
+      let resolvedIndex = preferredIndex;
+      if (preferredRel) {
+        const idx = relPaths.indexOf(preferredRel);
+        if (idx >= 0) {
+          resolvedIndex = idx;
+        }
+      }
+      index = Math.min(Math.max(0, resolvedIndex), relPaths.length - 1);
       message = "";
       update();
     } catch (err) {
@@ -1434,7 +1800,7 @@ function renderFileTable(items, { emptyMessage, onFileOps } = {}) {
     if (showActions) {
       cells.push(el("td", { class: "cell--actions" }, [renderFileOpsActions(item.rel_path, { variant: "inline" })]));
     }
-    return el("tr", {}, cells);
+    return el("tr", { tabindex: "-1", "data-rel-path": item.rel_path }, cells);
   });
 
   const table = el("table", { class: "file-table" }, [el("thead", {}, [header]), el("tbody", {}, rows)]);
@@ -1497,7 +1863,31 @@ function renderCategory(category, token) {
 	            onRefresh: () => load({ refresh: true }),
 	          }),
 	        );
-	        bodyHost.replaceChildren(renderAlbumsGrid(albums, { onFileOps: openFileOps }));
+	        const grid = renderAlbumsGrid(albums, { onFileOps: openFileOps });
+	        bodyHost.replaceChildren(grid);
+
+	        const jump = takePendingSearchJump(category.path);
+	        if (jump) {
+	          const targetAlbumRelPath =
+	            jump.kind === "album"
+	              ? jump.relPath
+	              : typeof jump.albumRelPath === "string" && jump.albumRelPath
+	                ? jump.albumRelPath
+	                : jump.relPath;
+	          const albumBtn = findByDataAttr(grid, "data-album", targetAlbumRelPath);
+	          if (albumBtn instanceof HTMLElement) {
+	            focusSearchTarget(albumBtn);
+	          }
+	          if (jump.kind === "image" && jump.openOverlay) {
+	            const title = (albumBtn && albumBtn.getAttribute("data-title")) || targetAlbumRelPath || "Album";
+	            imageOverlay.openAlbum({
+	              albumRelPath: targetAlbumRelPath,
+	              title,
+	              opener: albumBtn instanceof HTMLElement ? albumBtn : grid,
+	              startRelPath: jump.relPath,
+	            });
+	          }
+	        }
 	        return;
 	      }
 
@@ -1515,7 +1905,35 @@ function renderCategory(category, token) {
 	            onRefresh: () => load({ refresh: true }),
 	          }),
 	        );
-	        bodyHost.replaceChildren(renderThumbGrid(items, { onFileOps: openFileOps }));
+	        const grid = renderThumbGrid(items, { onFileOps: openFileOps });
+	        bodyHost.replaceChildren(grid);
+
+	        const jump = takePendingSearchJump(category.path);
+	        if (jump) {
+	          const idx = items.findIndex((it) => it && it.rel_path === jump.relPath);
+	          const targetBtn =
+	            idx >= 0 ? grid.querySelector(`button.thumb-tile[data-index="${idx}"]`) : null;
+	          if (targetBtn instanceof HTMLElement) {
+	            focusSearchTarget(targetBtn);
+	          }
+	          if (jump.openOverlay) {
+	            if (idx >= 0) {
+	              imageOverlay.open({
+	                relPaths: items.map((it) => it.rel_path),
+	                startIndex: idx,
+	                title: "Scattered",
+	                opener: targetBtn instanceof HTMLElement ? targetBtn : grid,
+	              });
+	            } else {
+	              imageOverlay.open({
+	                relPaths: [jump.relPath],
+	                startIndex: 0,
+	                title: "Image",
+	                opener: grid,
+	              });
+	            }
+	          }
+	        }
 	        return;
 	      }
 
@@ -1533,7 +1951,32 @@ function renderCategory(category, token) {
 	            onRefresh: () => load({ refresh: true }),
 	          }),
 	        );
-	        bodyHost.replaceChildren(renderVideosGrid(items, { onFileOps: openFileOps }));
+	        const grid = renderVideosGrid(items, { onFileOps: openFileOps });
+	        bodyHost.replaceChildren(grid);
+
+	        const jump = takePendingSearchJump(category.path);
+	        if (jump) {
+	          const idx = items.findIndex((it) => it && it.rel_path === jump.relPath);
+	          const targetBtn =
+	            idx >= 0 ? grid.querySelector(`button.video-card[data-index="${idx}"]`) : null;
+	          if (targetBtn instanceof HTMLElement) {
+	            focusSearchTarget(targetBtn);
+	          }
+	          if (jump.openOverlay) {
+	            if (idx >= 0) {
+	              videoOverlay.open({
+	                items,
+	                startIndex: idx,
+	                title: "Videos",
+	                opener: targetBtn instanceof HTMLElement ? targetBtn : grid,
+	              });
+	            } else {
+	              const payload =
+	                jump.payload && typeof jump.payload === "object" ? jump.payload : { rel_path: jump.relPath };
+	              videoOverlay.open({ items: [payload], startIndex: 0, title: "Video", opener: grid });
+	            }
+	          }
+	        }
 	        return;
 	      }
 
@@ -1554,7 +1997,15 @@ function renderCategory(category, token) {
 	              onRefresh: () => load({ refresh: true }),
 	            }),
 	          );
-	          bodyHost.replaceChildren(renderFileTable(games, { emptyMessage: "没有找到游戏文件。", onFileOps: openFileOps }));
+	          const table = renderFileTable(games, { emptyMessage: "没有找到游戏文件。", onFileOps: openFileOps });
+	          bodyHost.replaceChildren(table);
+	          const jump = takePendingSearchJump(category.path);
+	          if (jump) {
+	            const row = findByDataAttr(table, "data-rel-path", jump.relPath);
+	            if (row instanceof HTMLElement) {
+	              focusSearchTarget(row);
+	            }
+	          }
 	          return;
 	        }
 
@@ -1568,7 +2019,15 @@ function renderCategory(category, token) {
 	            onRefresh: () => load({ refresh: true }),
 	          }),
 	        );
-	        bodyHost.replaceChildren(renderFileTable(others, { emptyMessage: "没有找到其他文件。", onFileOps: openFileOps }));
+	        const table = renderFileTable(others, { emptyMessage: "没有找到其他文件。", onFileOps: openFileOps });
+	        bodyHost.replaceChildren(table);
+	        const jump = takePendingSearchJump(category.path);
+	        if (jump) {
+	          const row = findByDataAttr(table, "data-rel-path", jump.relPath);
+	          if (row instanceof HTMLElement) {
+	            focusSearchTarget(row);
+	          }
+	        }
 	        return;
 	      }
 
@@ -1622,6 +2081,8 @@ function renderNotFound(_token) {
   ]);
   main.replaceChildren(header);
 }
+
+globalSearch = setupGlobalSearch();
 
 window.addEventListener("popstate", () => {
   closeAllOverlays({ restoreScroll: false, restoreFocus: false });

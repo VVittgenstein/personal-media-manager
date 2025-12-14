@@ -833,7 +833,7 @@
       ],
       "lane": "next",
       "priority_suggested": "P1",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251212-act-004-spa-shell",
         "T-20251212-act-008-search-api"
@@ -846,14 +846,17 @@
         "frontend/search"
       ],
       "artifacts": [
-        "search bar",
-        "search results panel"
+        "frontend/spa/index.html",
+        "frontend/spa/app.js",
+        "frontend/spa/styles.css",
+        "GET /api/search (consumed)",
+        "Compact/Compact-T-20251212-act-008-search-ui-2025-12-14-T050639Z.md"
       ],
       "citations": [
         "EVID-002"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-14T05:06:39Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-008",

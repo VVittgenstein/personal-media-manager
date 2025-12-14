@@ -15,6 +15,29 @@
           <span class="brand__badge">local</span>
         </a>
 
+        <form class="search" id="global-search-form" role="search" autocomplete="off">
+          <div class="search__field">
+            <input
+              class="search__input"
+              id="global-search-input"
+              type="search"
+              placeholder="Search albums / files…"
+              aria-label="Global search"
+              spellcheck="false"
+            />
+            <button
+              class="search__clear"
+              id="global-search-clear"
+              type="button"
+              aria-label="Clear search"
+              hidden
+            >
+              <span aria-hidden="true">✕</span>
+            </button>
+          </div>
+          <div class="search__results" id="global-search-results" hidden></div>
+        </form>
+
         <nav class="nav" aria-label="Primary">
           <a class="nav__item" href="/images" data-nav>Images</a>
           <a class="nav__item" href="/scattered" data-nav>Scattered</a>
