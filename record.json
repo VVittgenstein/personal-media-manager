@@ -919,25 +919,16 @@
       ],
       "lane": "next",
       "priority_suggested": "P1",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251212-act-002-image-thumbs",
         "T-20251212-act-002-album-cover-mosaic",
         "T-20251212-act-004-category-views",
         "T-20251212-act-003-ffmpeg-mosaic"
       ],
-      "blocked": true,
-      "blocked_by": [
-        {
-          "dep_id": "DEP-003",
-          "name": "大库测试集与目标硬件基准（用于 4K/高帧率播放与滚动性能验证）",
-          "type": "access",
-          "status": "unknown",
-          "doc_url": "",
-          "note": "缺少统一可复现测试集/硬件基线，需先构造并固化方法"
-        }
-      ],
-      "unblock_plan": "先按 DR 方案构造测试集并记录硬件参数，再执行压测。",
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
       "estimate_h": 6,
       "interfaces_touched": [
         "perf/test",
@@ -945,7 +936,11 @@
         "frontend/views"
       ],
       "artifacts": [
-        "performance report"
+        "perf/test/generate_media_root.py",
+        "perf/test/run_perf_spike.py",
+        "perf/test/README.md",
+        "doc/perf/perf-spike.md",
+        "Compact/Compact-T-20251212-act-009-perf-spike-2025-12-14-T071143Z.md"
       ],
       "citations": [
         "EVID-001",
@@ -953,7 +948,7 @@
         "EVID-007"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-14T07:11:43Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-009",
