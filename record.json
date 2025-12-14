@@ -876,36 +876,29 @@
       ],
       "lane": "next",
       "priority_suggested": "P1",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251212-act-006-video-overlay-ui"
       ],
-      "blocked": true,
-      "blocked_by": [
-        {
-          "dep_id": "DEP-002",
-          "name": "浏览器音视频格式支持范围（HTML5 播放能力差异）",
-          "type": "policy",
-          "status": "unknown",
-          "doc_url": "",
-          "note": "部分封装/编码浏览器可能无法播放，需定义提示与外部打开方案"
-        }
-      ],
-      "unblock_plan": "先定义/验证支持格式清单，再实现检测与提示。",
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
       "estimate_h": 4,
       "interfaces_touched": [
         "frontend/overlay",
         "doc/formats"
       ],
       "artifacts": [
-        "unsupported-format UI",
-        "formats doc"
+        "frontend/spa/app.js",
+        "frontend/spa/styles.css",
+        "doc/formats/video-playback.md",
+        "Compact/Compact-T-20251212-act-006-format-hints-2025-12-14-T064454Z.md"
       ],
       "citations": [
         "EVID-002"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-14T06:45:38Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-006",

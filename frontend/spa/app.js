@@ -973,9 +973,10 @@ function createVideoOverlay() {
   );
   const stage = el("div", { class: "overlay__stage" }, []);
   const bg = el("div", { class: "overlay__bg" }, []);
+  const notice = el("div", { class: "overlay__notice", "aria-live": "polite" }, []);
   const status = el("div", { class: "overlay__status", text: "" }, []);
   const video = el("video", { class: "overlay__video", controls: "", playsinline: "", preload: "metadata" }, []);
-  stage.append(bg, status, video);
+  stage.append(bg, notice, status, video);
   viewer.append(prevBtn, stage, nextBtn);
 
   panel.append(header, viewer);
@@ -991,6 +992,8 @@ function createVideoOverlay() {
   let savedScrollY = 0;
   let savedBodyOverflow = "";
   let savedBodyPaddingRight = "";
+  let currentSrc = "";
+  let noticeHideTimer = null;
 
   function lockBodyScroll() {
     savedScrollY = window.scrollY;
@@ -1018,11 +1021,190 @@ function createVideoOverlay() {
     }
     video.removeAttribute("src");
     video.removeAttribute("poster");
+    currentSrc = "";
     try {
       video.load();
     } catch {
       // ignore
     }
+  }
+
+  function clearNoticeTimer() {
+    if (noticeHideTimer) {
+      clearTimeout(noticeHideTimer);
+      noticeHideTimer = null;
+    }
+  }
+
+  function setNoticeVisible(isVisible) {
+    notice.classList.toggle("is-visible", Boolean(isVisible));
+    if (!isVisible) {
+      notice.replaceChildren();
+    }
+  }
+
+  function flashStatus(text, { durationMs = 2200 } = {}) {
+    if (!isOpen) return;
+    const stamp = requestEpoch;
+    status.textContent = String(text || "");
+    clearNoticeTimer();
+    if (!text) return;
+    noticeHideTimer = setTimeout(() => {
+      if (!isOpen) return;
+      if (stamp !== requestEpoch) return;
+      if (status.textContent === String(text || "")) {
+        status.textContent = "";
+      }
+    }, Math.max(0, Number(durationMs) || 0));
+  }
+
+  function buildMediaUrl(relPath) {
+    const raw = API.media(relPath);
+    try {
+      return new URL(raw, location.origin).toString();
+    } catch {
+      return raw;
+    }
+  }
+
+  function resolveVideoSupport(ext) {
+    const normalized = String(ext || "").toLowerCase();
+    const candidatesByExt = {
+      ".mp4": [
+        "video/mp4",
+        'video/mp4; codecs="avc1.42E01E, mp4a.40.2"',
+        'video/mp4; codecs="avc1.640028, mp4a.40.2"',
+      ],
+      ".m4v": [
+        "video/mp4",
+        'video/mp4; codecs="avc1.42E01E, mp4a.40.2"',
+        'video/mp4; codecs="avc1.640028, mp4a.40.2"',
+      ],
+      ".mov": ["video/quicktime", "video/mp4"],
+      ".webm": ["video/webm", 'video/webm; codecs="vp9, opus"', 'video/webm; codecs="vp8, vorbis"'],
+      ".mkv": ["video/x-matroska"],
+      ".avi": ["video/x-msvideo"],
+      ".flv": ["video/x-flv"],
+      ".wmv": ["video/x-ms-wmv"],
+      ".mpeg": ["video/mpeg"],
+      ".mpg": ["video/mpeg"],
+      ".ts": ["video/mp2t"],
+    };
+
+    const candidates = candidatesByExt[normalized] || [];
+    if (!candidates.length || typeof video.canPlayType !== "function") {
+      return { level: "unknown", candidates: [], checks: [] };
+    }
+    const checks = candidates.map((type) => ({ type, result: String(video.canPlayType(type) || "") }));
+    const best = checks.some((c) => c.result === "probably") ? "probably" : checks.some((c) => c.result === "maybe") ? "maybe" : "";
+    if (!best) {
+      return { level: "unsupported", candidates, checks };
+    }
+    return { level: best, candidates, checks };
+  }
+
+  function describeMediaError(err) {
+    const code = err?.code ?? null;
+    const mapping = {
+      1: "MEDIA_ERR_ABORTED",
+      2: "MEDIA_ERR_NETWORK",
+      3: "MEDIA_ERR_DECODE",
+      4: "MEDIA_ERR_SRC_NOT_SUPPORTED",
+    };
+    const name = mapping[code] || "MEDIA_ERR_UNKNOWN";
+    const hint =
+      name === "MEDIA_ERR_SRC_NOT_SUPPORTED"
+        ? "浏览器不支持该视频的封装/编码。"
+        : name === "MEDIA_ERR_DECODE"
+          ? "浏览器解码失败：可能是不支持的编码或文件损坏。"
+          : name === "MEDIA_ERR_NETWORK"
+            ? "网络/读取失败：请重试或检查文件。"
+            : "播放失败：请重试或外部打开。";
+    return { name, code: Number.isFinite(code) ? Number(code) : null, hint };
+  }
+
+  function buildTranscodeHint(relPath) {
+    const input = String(relPath || "");
+    const base = basename(input) || "input";
+    const outBase = base.includes(".") ? base.replace(/\.[^/.]+$/, "") : base;
+    const output = `${outBase}.mp4`;
+    const command = `ffmpeg -i \"${input}\" -c:v libx264 -c:a aac -movflags +faststart \"${output}\"`;
+    return { command, output };
+  }
+
+  async function copyText(text) {
+    const value = String(text || "");
+    if (!value) return false;
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      try {
+        window.prompt("Copy to clipboard:", value);
+      } catch {
+        // ignore
+      }
+      return false;
+    }
+  }
+
+  function showUnsupportedNotice({ relPath, ext, support, reason, detail } = {}) {
+    const path = String(relPath || "");
+    if (!path) return;
+
+    const heading = String(reason || "当前浏览器可能无法播放该视频。");
+    const explain = detail ? String(detail) : "";
+    const mediaUrl = buildMediaUrl(path);
+    const { command } = buildTranscodeHint(path);
+
+    const openLink = el(
+      "a",
+      { class: "btn btn--sm", href: mediaUrl, target: "_blank", rel: "noopener", title: "Open media URL (new tab)" },
+      [el("span", { text: "新标签打开" })],
+    );
+    const downloadName = basename(path) || "video";
+    const downloadLink = el(
+      "a",
+      { class: "btn btn--sm", href: mediaUrl, download: downloadName, title: "Download file" },
+      [el("span", { text: "下载文件" })],
+    );
+    const copyUrlBtn = el("button", { class: "btn btn--sm", type: "button" }, [el("span", { text: "复制链接" })]);
+    copyUrlBtn.addEventListener("click", async () => {
+      const ok = await copyText(mediaUrl);
+      flashStatus(ok ? "已复制链接。" : "复制失败，请手动复制。");
+    });
+    const copyCmdBtn = el("button", { class: "btn btn--sm", type: "button" }, [el("span", { text: "复制转码命令" })]);
+    copyCmdBtn.addEventListener("click", async () => {
+      const ok = await copyText(command);
+      flashStatus(ok ? "已复制转码命令。" : "复制失败，请手动复制。");
+    });
+
+    const lines = [
+      explain,
+      "建议：下载后用外部播放器打开，或复制链接到 VLC → 打开网络串流，或使用 ffmpeg 转码为 MP4(H.264/AAC)。",
+    ].filter(Boolean);
+
+    const details = [];
+    const normalizedExt = String(ext || "").toLowerCase();
+    if (normalizedExt) details.push(`ext=${normalizedExt}`);
+    if (support?.checks?.length) {
+      const summary = support.checks
+        .map((entry) => `${entry.type} → ${entry.result ? entry.result : "''"}`)
+        .join("\n");
+      details.push(summary);
+    }
+
+    const body = el("div", { class: "overlay__notice-body" }, [
+      ...lines.map((line) => el("div", { text: line })),
+      ...(details.length ? [el("pre", { class: "overlay__notice-code", text: details.join("\n") })] : []),
+    ]);
+
+    notice.replaceChildren(
+      el("div", { class: "overlay__notice-title", text: heading }),
+      body,
+      el("div", { class: "overlay__notice-actions" }, [openLink, downloadLink, copyUrlBtn, copyCmdBtn]),
+    );
+    setNoticeVisible(true);
   }
 
   function update() {
@@ -1048,8 +1230,11 @@ function createVideoOverlay() {
       if (folder) parts.push(folder);
       subtitle.textContent = `${currentName} · ${parts.join(" · ")}`;
 
+      clearNoticeTimer();
+      setNoticeVisible(false);
       status.textContent = "Loading…";
       const src = API.media(currentRelPath);
+      currentSrc = src;
       const poster = API.videoMosaic(currentRelPath);
       bg.style.backgroundImage = `url("${poster}")`;
 
@@ -1059,6 +1244,17 @@ function createVideoOverlay() {
         video.poster = poster;
       }
 
+      const support = resolveVideoSupport(ext);
+      if (support.level === "unsupported") {
+        showUnsupportedNotice({
+          relPath: currentRelPath,
+          ext,
+          support,
+          reason: "该视频格式在当前浏览器可能不受支持。",
+          detail: "canPlayType 探测结果为空，通常意味着无法播放该封装/编码。",
+        });
+      }
+
       const req = requestEpoch;
       const playPromise = video.play();
       if (playPromise && typeof playPromise.then === "function") {
@@ -1066,13 +1262,36 @@ function createVideoOverlay() {
           .then(() => {
             if (req !== requestEpoch || !isOpen) return;
             status.textContent = "";
+            setNoticeVisible(false);
           })
           .catch((err) => {
             if (req !== requestEpoch || !isOpen) return;
-            status.textContent = err?.message ? String(err.message) : "Autoplay blocked. Press play.";
+            const name = err?.name ? String(err.name) : "";
+            const msg = err?.message ? String(err.message) : "";
+            const normalized = `${name} ${msg}`.toLowerCase();
+            if (name === "NotAllowedError" || normalized.includes("autoplay")) {
+              status.textContent = "Autoplay blocked. Press play.";
+              setNoticeVisible(false);
+              return;
+            }
+
+            if (name === "NotSupportedError" || normalized.includes("supported sources") || normalized.includes("not supported")) {
+              showUnsupportedNotice({
+                relPath: currentRelPath,
+                ext,
+                support,
+                reason: "无法播放：浏览器不支持该视频格式/编码。",
+                detail: msg || "NotSupportedError",
+              });
+              status.textContent = "Not supported.";
+              return;
+            }
+
+            status.textContent = msg || "Failed to play.";
           });
       } else {
         status.textContent = "";
+        setNoticeVisible(false);
       }
       return;
     }
@@ -1080,6 +1299,8 @@ function createVideoOverlay() {
     subtitle.textContent = "";
     bg.style.backgroundImage = "";
     stopVideo();
+    clearNoticeTimer();
+    setNoticeVisible(false);
     status.textContent = message || "No video.";
   }
 
@@ -1118,6 +1339,8 @@ function createVideoOverlay() {
     stage.classList.remove("has-media");
     bg.style.backgroundImage = "";
     stopVideo();
+    clearNoticeTimer();
+    setNoticeVisible(false);
     unlockBodyScroll();
 
     const focusTarget = openerEl;
@@ -1137,6 +1360,7 @@ function createVideoOverlay() {
     if (!total) return;
     const nextIndex = Math.min(Math.max(0, index + delta), total - 1);
     if (nextIndex === index) return;
+    requestEpoch += 1;
     index = nextIndex;
     update();
   }
@@ -1148,10 +1372,26 @@ function createVideoOverlay() {
 
   video.addEventListener("playing", () => {
     if (!isOpen) return;
+    if (!currentSrc || video.getAttribute("src") !== currentSrc) return;
     status.textContent = "";
+    setNoticeVisible(false);
   });
   video.addEventListener("error", () => {
     if (!isOpen) return;
+    if (!currentSrc || video.getAttribute("src") !== currentSrc) return;
+    const current = items[index];
+    const currentRelPath = current?.rel_path ? String(current.rel_path) : "";
+    const ext = current?.ext ? String(current.ext) : "";
+    const support = resolveVideoSupport(ext);
+    const mediaErr = describeMediaError(video.error);
+    if (mediaErr.name === "MEDIA_ERR_ABORTED") return;
+    showUnsupportedNotice({
+      relPath: currentRelPath,
+      ext,
+      support,
+      reason: mediaErr.hint,
+      detail: `${mediaErr.name}${mediaErr.code !== null ? ` (${mediaErr.code})` : ""}`,
+    });
     status.textContent = "Failed to load.";
   });
 
