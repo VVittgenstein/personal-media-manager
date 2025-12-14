@@ -473,6 +473,53 @@ class TestApiServer(unittest.TestCase):
                 server.server_close()
                 t.join(timeout=2)
 
+    def test_image_endpoint_serves_original_bytes_and_etag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "MediaRoot"
+            root.mkdir(parents=True)
+            png_bytes = b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/xcAAn8B9pEo6QAAAABJRU5ErkJggg=="
+            )
+            (root / "loose.png").write_bytes(png_bytes)
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=2)
+
+            try:
+                conn.request("GET", "/api/image?path=loose.png")
+                resp = conn.getresponse()
+                body = resp.read()
+                self.assertEqual(resp.status, 200)
+                self.assertIn("image/", resp.headers.get("Content-Type", ""))
+                self.assertEqual(body, png_bytes)
+
+                etag = resp.headers.get("ETag")
+                self.assertIsInstance(etag, str)
+                self.assertTrue(etag)
+
+                conn.request("GET", "/api/image?path=loose.png", headers={"If-None-Match": etag})
+                resp = conn.getresponse()
+                body = resp.read()
+                self.assertEqual(resp.status, 304)
+                self.assertEqual(body, b"")
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
     def test_trash_restore_and_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import errno
+import hashlib
 import json
 import logging
 import mimetypes
 import os
+import shutil
 import secrets
 import stat
 import threading
@@ -288,7 +290,29 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/health":
-            self._send_json(200, {"ok": True})
+            pillow_ok = False
+            pillow_version: str | None = None
+            pillow_error: str | None = None
+            try:
+                import PIL  # type: ignore[import-not-found]
+
+                pillow_ok = True
+                pillow_version = getattr(PIL, "__version__", None)
+            except Exception as exc:
+                pillow_error = str(exc)
+
+            ffmpeg_path = shutil.which("ffmpeg")
+            ffprobe_path = shutil.which("ffprobe")
+            deps: dict[str, Any] = {
+                "pillow": {
+                    "available": pillow_ok,
+                    "version": pillow_version,
+                    "error": None if pillow_ok else pillow_error,
+                },
+                "ffmpeg": {"available": bool(ffmpeg_path), "path": ffmpeg_path},
+                "ffprobe": {"available": bool(ffprobe_path), "path": ffprobe_path},
+            }
+            self._send_json(200, {"ok": True, "deps": deps})
             return
 
         if path in {"/api/albums", "/api/scattered", "/api/videos", "/api/others", "/api/search"}:
@@ -465,6 +489,91 @@ class _Handler(BaseHTTPRequestHandler):
                     "items": items,
                 },
             )
+            return
+
+        if path == "/api/image":
+            rel_path = query.get("path", [""])[0]
+            if not isinstance(rel_path, str) or not rel_path.strip():
+                self._send_error(400, "INVALID_REQUEST", "missing or invalid 'path' query parameter")
+                return
+
+            try:
+                rel_path = normalize_rel_path(rel_path)
+            except SandboxViolation as exc:
+                self._send_error(400, "SANDBOX_VIOLATION", str(exc))
+                return
+
+            if rel_path == "":
+                self._send_error(400, "INVALID_REQUEST", "path must not be MediaRoot root")
+                return
+
+            media_types = getattr(self.server, "media_types", None) or getattr(self.server.index_cache, "_media_types", None)
+            if media_types is None:
+                media_types = MediaTypes.defaults()
+            ext = os.path.splitext(rel_path)[1].lower()
+            if media_types.categorize_ext(ext) != "image":
+                self._send_error(415, "UNSUPPORTED_MEDIA_TYPE", f"not an image: {rel_path}")
+                return
+
+            sandbox = MediaRootSandbox(self.server.index_cache.media_root)
+            try:
+                abs_file = sandbox.to_abs_path_allow_missing(rel_path)
+            except SandboxViolation as exc:
+                self._send_error(400, "SANDBOX_VIOLATION", str(exc))
+                return
+
+            try:
+                st = os.stat(abs_file, follow_symlinks=False)
+            except FileNotFoundError:
+                self._send_error(404, "NOT_FOUND", f"file not found: {rel_path}")
+                return
+            except OSError as exc:
+                self._send_error(500, "STAT_FAILED", f"cannot stat file: {exc}")
+                return
+
+            if not stat.S_ISREG(st.st_mode):
+                self._send_error(404, "NOT_A_FILE", f"not a file: {rel_path}")
+                return
+
+            file_size = int(getattr(st, "st_size", 0) or 0)
+            content_type = self._guess_content_type(abs_file)
+            etag_src = f"v1|{rel_path}|{getattr(st, 'st_mtime_ns', int(st.st_mtime * 1_000_000_000))}|{file_size}".encode(
+                "utf-8"
+            )
+            etag = hashlib.sha1(etag_src).hexdigest()
+
+            if_none_match = self.headers.get("If-None-Match")
+            if if_none_match and if_none_match.strip('"') == etag:
+                self._send_bytes(
+                    304,
+                    body=b"",
+                    content_type=content_type,
+                    extra_headers={"ETag": f"\"{etag}\""},
+                    cache_control="public, max-age=0, must-revalidate",
+                )
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(file_size))
+            self.send_header("Cache-Control", "public, max-age=0, must-revalidate")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("ETag", f"\"{etag}\"")
+            self.send_header("Last-Modified", formatdate(st.st_mtime, usegmt=True))
+            self.end_headers()
+
+            if file_size <= 0:
+                return
+
+            try:
+                with abs_file.open("rb") as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                return
             return
 
         if path == "/api/thumb":

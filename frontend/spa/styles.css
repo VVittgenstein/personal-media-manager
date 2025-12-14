@@ -644,6 +644,8 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%;
+  min-width: 0;
   cursor: pointer;
   color: inherit;
   font: inherit;
@@ -658,11 +660,21 @@ a:hover {
 .album-title {
   font-weight: 700;
   letter-spacing: 0.2px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .album-subtitle {
   font-size: 12px;
   color: var(--muted-2);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .thumbs-grid {
@@ -679,6 +691,8 @@ a:hover {
   display: grid;
   grid-template-rows: 1fr auto;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
   cursor: pointer;
   color: inherit;
   font: inherit;
@@ -707,6 +721,7 @@ a:hover {
 
 .media-shell {
   position: relative;
+  min-width: 0;
 }
 
 .item-actions {
@@ -785,6 +800,8 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%;
+  min-width: 0;
   cursor: pointer;
   color: inherit;
   font: inherit;
@@ -1178,6 +1195,14 @@ body.overlay-open {
   flex-direction: column;
 }
 
+.overlay--image .overlay__panel,
+.overlay--video .overlay__panel {
+  inset: 0;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+}
+
 @media (prefers-color-scheme: light) {
   .overlay__panel {
     background: rgba(255, 255, 255, 0.88);
@@ -1220,6 +1245,10 @@ body.overlay-open {
   text-overflow: ellipsis;
 }
 
+.overlay__subtitle:empty {
+  display: none;
+}
+
 .overlay__controls {
   display: flex;
   align-items: center;
@@ -1246,26 +1275,43 @@ body.overlay-open {
 
 .overlay__viewer {
   flex: 1;
-  display: grid;
-  grid-template-columns: 56px 1fr 56px;
+  position: relative;
+  display: flex;
   min-height: 0;
 }
 
 .overlay__nav {
   appearance: none;
-  border: none;
-  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.38);
   color: var(--text);
   font: inherit;
   font-size: 18px;
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: background 120ms ease;
+  width: 44px;
+  height: 44px;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  transition: background 120ms ease, transform 120ms ease;
+  backdrop-filter: blur(10px);
+}
+
+.overlay__nav--prev {
+  left: 12px;
+}
+
+.overlay__nav--next {
+  right: 12px;
 }
 
 .overlay__nav:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.55);
+  transform: translateY(-50%) scale(1.03);
 }
 
 .overlay__nav:disabled {
@@ -1279,7 +1325,27 @@ body.overlay-open {
   place-items: center;
   background: rgba(0, 0, 0, 0.28);
   overflow: hidden;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
+}
+
+.overlay--image .overlay__header,
+.overlay--video .overlay__header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  border-bottom: none;
+  background: transparent;
+  pointer-events: none;
+}
+
+.overlay--image .overlay__controls,
+.overlay--video .overlay__controls {
+  pointer-events: auto;
 }
 
 @media (prefers-color-scheme: light) {
@@ -1313,25 +1379,29 @@ body.overlay-open {
 }
 
 .overlay__img {
-  position: relative;
+  position: absolute;
   z-index: 1;
+  inset: 0;
   width: 100%;
   height: 100%;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+  object-position: center;
   opacity: 0;
   transition: opacity 120ms ease;
 }
 
 .overlay__video {
-  position: relative;
+  position: absolute;
   z-index: 1;
+  inset: 0;
   width: 100%;
   height: 100%;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+  object-position: center;
   display: block;
 }
 
@@ -1426,8 +1496,17 @@ body.overlay-open {
     inset: 12px;
   }
 
-  .overlay__viewer {
-    grid-template-columns: 44px 1fr 44px;
+  .overlay__nav {
+    width: 40px;
+    height: 40px;
+  }
+
+  .overlay__nav--prev {
+    left: 8px;
+  }
+
+  .overlay__nav--next {
+    right: 8px;
   }
 }
 

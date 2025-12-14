@@ -20,6 +20,7 @@ const API = {
     return `/api/search?${params.toString()}`;
   },
   thumb: (relPath) => `/api/thumb?path=${encodeURIComponent(relPath)}`,
+  image: (relPath) => `/api/image?path=${encodeURIComponent(relPath)}`,
   albumCover: (relPath) => `/api/album-cover?path=${encodeURIComponent(relPath)}`,
   videoMosaic: (relPath) => `/api/video-mosaic?path=${encodeURIComponent(relPath)}`,
   media: (relPath) => `/api/media?path=${encodeURIComponent(relPath)}`,
@@ -83,6 +84,57 @@ appRoot.append(imageOverlay.root, videoOverlay.root, fileOpsDialog.root);
 
 let globalSearch = null;
 let pendingSearchJump = null;
+
+let runtimeDeps = null;
+let runtimeDepsPromise = null;
+
+function ensureRuntimeDeps() {
+  if (runtimeDepsPromise) return runtimeDepsPromise;
+  runtimeDepsPromise = fetchJson("/api/health")
+    .then((data) => {
+      const deps = data && typeof data === "object" ? data.deps : null;
+      runtimeDeps = deps && typeof deps === "object" ? deps : null;
+      return runtimeDeps;
+    })
+    .catch(() => {
+      runtimeDeps = null;
+      return null;
+    });
+  return runtimeDepsPromise;
+}
+
+function buildDepBadges(deps, categoryKey) {
+  if (!deps || typeof deps !== "object") return [];
+  const pillowOk = deps.pillow && deps.pillow.available === true;
+  const ffmpegOk = deps.ffmpeg && deps.ffmpeg.available === true;
+
+  const out = [];
+  if (categoryKey === "images" || categoryKey === "scattered") {
+    if (!pillowOk) {
+      out.push({
+        label: "Thumbnails",
+        value: "Disabled (Pillow)",
+        title: "缺少 Pillow：请运行 pip install -r backend/requirements.txt，或使用 start.bat 自动安装。",
+      });
+    }
+  }
+  if (categoryKey === "videos") {
+    if (!ffmpegOk) {
+      out.push({
+        label: "Video thumbs",
+        value: "Disabled (FFmpeg)",
+        title: "缺少 FFmpeg：安装 ffmpeg 并加入 PATH 后可生成视频预览缩略图。",
+      });
+    } else if (!pillowOk) {
+      out.push({
+        label: "Video thumbs",
+        value: "Disabled (Pillow)",
+        title: "缺少 Pillow：请运行 pip install -r backend/requirements.txt，或使用 start.bat 自动安装。",
+      });
+    }
+  }
+  return out;
+}
 
 function closeAllOverlays({ restoreScroll = false, restoreFocus = false } = {}) {
   globalSearch?.close?.({ restoreFocus });
@@ -669,7 +721,7 @@ function setupGlobalSearch() {
 }
 
 function createImageOverlay() {
-  const root = el("div", { class: "overlay", "aria-hidden": "true" }, []);
+  const root = el("div", { class: "overlay overlay--image", "aria-hidden": "true" }, []);
   const backdrop = el(
     "button",
     { class: "overlay__backdrop", type: "button", "aria-label": "Close overlay" },
@@ -716,14 +768,17 @@ function createImageOverlay() {
   const albumCache = new Map();
   let requestEpoch = 0;
   let isOpen = false;
-  let items = [];
-  let index = 0;
-  let contextTitle = "";
-  let message = "";
-  let openerEl = null;
-  let savedScrollY = 0;
-  let savedBodyOverflow = "";
-  let savedBodyPaddingRight = "";
+	  let items = [];
+	  let index = 0;
+	  let contextTitle = "";
+	  let message = "";
+	  let currentThumbSrc = "";
+	  let currentFullSrc = "";
+	  let isFallback = false;
+	  let openerEl = null;
+	  let savedScrollY = 0;
+	  let savedBodyOverflow = "";
+	  let savedBodyPaddingRight = "";
 
   function lockBodyScroll() {
     savedScrollY = window.scrollY;
@@ -743,35 +798,42 @@ function createImageOverlay() {
     document.body.style.paddingRight = savedBodyPaddingRight;
   }
 
-	  function update() {
-	    if (!isOpen) return;
-	    const total = items.length;
-	    const hasItems = total > 0;
-	    prevBtn.disabled = !hasItems || index <= 0;
-	    nextBtn.disabled = !hasItems || index >= total - 1;
-	    stage.classList.toggle("has-media", hasItems);
+		  function update() {
+		    if (!isOpen) return;
+		    const total = items.length;
+		    const hasItems = total > 0;
+		    prevBtn.disabled = !hasItems || index <= 0;
+		    nextBtn.disabled = !hasItems || index >= total - 1;
+		    stage.classList.toggle("has-media", hasItems);
 
-	    const currentRelPath = hasItems ? String(items[index] || "") : "";
-	    const currentName = currentRelPath ? basename(currentRelPath) || currentRelPath : "";
-	    title.textContent = contextTitle || currentName || "Image";
+		    const currentRelPath = hasItems ? String(items[index] || "") : "";
+		    const currentName = currentRelPath ? basename(currentRelPath) || currentRelPath : "";
+		    title.textContent = hasItems ? `${index + 1}/${total}` : contextTitle || "Image";
 
-	    if (hasItems) {
-	      subtitle.textContent = `${currentName} · ${index + 1}/${total}`;
-	      status.textContent = "Loading…";
-	      img.classList.remove("is-loaded", "is-error");
-	      img.alt = currentName || "image";
-	      const src = API.thumb(currentRelPath);
-	      bg.style.backgroundImage = `url("${src}")`;
-	      img.src = src;
-	      return;
-	    }
+			    if (hasItems) {
+			      subtitle.textContent = "";
+			      status.textContent = "Loading…";
+			      img.classList.remove("is-loaded", "is-error");
+			      img.alt = currentName || "image";
+			      const thumbSrc = API.thumb(currentRelPath);
+		      const fullSrc = API.image(currentRelPath);
+		      currentThumbSrc = thumbSrc;
+		      currentFullSrc = fullSrc;
+		      isFallback = false;
+		      bg.style.backgroundImage = `url("${thumbSrc}")`;
+		      img.src = fullSrc;
+		      return;
+		    }
 
-	    subtitle.textContent = "";
-	    bg.style.backgroundImage = "";
-	    img.removeAttribute("src");
-	    img.alt = "";
-	    status.textContent = message || "No image.";
-	  }
+		    subtitle.textContent = "";
+		    bg.style.backgroundImage = "";
+		    img.removeAttribute("src");
+		    img.alt = "";
+		    currentThumbSrc = "";
+		    currentFullSrc = "";
+		    isFallback = false;
+		    status.textContent = message || "No image.";
+		  }
 
   function open({ relPaths, startIndex = 0, title: nextTitle = "", opener } = {}) {
     requestEpoch += 1;
@@ -797,14 +859,17 @@ function createImageOverlay() {
 	    if (!isOpen) return;
 	    requestEpoch += 1;
 	    isOpen = false;
-	    items = [];
-	    index = 0;
-	    contextTitle = "";
-	    message = "";
-	    root.classList.remove("is-open");
-	    root.setAttribute("aria-hidden", "true");
-	    stage.classList.remove("has-media");
-	    bg.style.backgroundImage = "";
+		    items = [];
+		    index = 0;
+		    contextTitle = "";
+		    message = "";
+		    currentThumbSrc = "";
+		    currentFullSrc = "";
+		    isFallback = false;
+		    root.classList.remove("is-open");
+		    root.setAttribute("aria-hidden", "true");
+		    stage.classList.remove("has-media");
+		    bg.style.backgroundImage = "";
 	    img.removeAttribute("src");
 	    img.alt = "";
 	    unlockBodyScroll();
@@ -888,18 +953,27 @@ function createImageOverlay() {
   prevBtn.addEventListener("click", () => move(-1));
   nextBtn.addEventListener("click", () => move(1));
 
-	  img.addEventListener("load", () => {
-	    if (!isOpen) return;
-	    img.classList.add("is-loaded");
-	    status.textContent = "";
-	  });
-	  img.addEventListener("error", () => {
-	    if (!isOpen) return;
-	    img.classList.add("is-error");
-	    stage.classList.remove("has-media");
-	    bg.style.backgroundImage = "";
-	    status.textContent = "Failed to load.";
-	  });
+		  img.addEventListener("load", () => {
+		    if (!isOpen) return;
+		    img.classList.add("is-loaded");
+		    if (!isFallback) {
+		      status.textContent = "";
+		    }
+		  });
+		  img.addEventListener("error", () => {
+		    if (!isOpen) return;
+		    const attempted = img.getAttribute("src") || "";
+		    if (currentThumbSrc && attempted === currentFullSrc && currentThumbSrc !== currentFullSrc) {
+		      isFallback = true;
+		      status.textContent = "Preview only (format not supported).";
+		      img.src = currentThumbSrc;
+		      return;
+		    }
+		    img.classList.add("is-error");
+		    stage.classList.remove("has-media");
+		    bg.style.backgroundImage = "";
+		    status.textContent = "Failed to load.";
+		  });
 
   document.addEventListener("keydown", (event) => {
     if (!isOpen) return;
@@ -1215,24 +1289,18 @@ function createVideoOverlay() {
     nextBtn.disabled = !hasItems || index >= total - 1;
     stage.classList.toggle("has-media", hasItems);
 
-    const current = hasItems ? items[index] : null;
-    const currentRelPath = current?.rel_path ? String(current.rel_path) : "";
-    const currentName = currentRelPath ? basename(currentRelPath) || currentRelPath : "";
-    title.textContent = contextTitle || currentName || "Video";
+	    const current = hasItems ? items[index] : null;
+	    const currentRelPath = current?.rel_path ? String(current.rel_path) : "";
+	    const currentName = currentRelPath ? basename(currentRelPath) || currentRelPath : "";
+	    title.textContent = hasItems ? `${index + 1}/${total}` : contextTitle || "Video";
 
-    if (hasItems && currentRelPath) {
-      const ext = current?.ext ? String(current.ext) : "";
-      const folder = current?.folder_rel_path ? String(current.folder_rel_path) : "/";
-      const size = current?.size_bytes !== null && current?.size_bytes !== undefined ? formatBytes(current.size_bytes) : "";
-      const parts = [`${index + 1}/${total}`];
-      if (ext) parts.push(ext);
-      if (size && size !== "—") parts.push(size);
-      if (folder) parts.push(folder);
-      subtitle.textContent = `${currentName} · ${parts.join(" · ")}`;
+	    if (hasItems && currentRelPath) {
+	      const ext = current?.ext ? String(current.ext) : "";
+	      subtitle.textContent = "";
 
-      clearNoticeTimer();
-      setNoticeVisible(false);
-      status.textContent = "Loading…";
+	      clearNoticeTimer();
+	      setNoticeVisible(false);
+	      status.textContent = "Loading…";
       const src = API.media(currentRelPath);
       currentSrc = src;
       const poster = API.videoMosaic(currentRelPath);
@@ -1905,7 +1973,7 @@ function renderAlbumsGrid(albums, { onFileOps } = {}) {
       const shell = el("div", { class: "media-shell" }, []);
       const openBtn = el("button", { class: "album-card", type: "button", "data-album": album.rel_path, "data-title": albumTitle }, [
         el("div", { class: "album-cover" }, [cover.frame]),
-        el("div", { class: "album-title", text: albumTitle }),
+        el("div", { class: "album-title", title: albumTitle, text: albumTitle }),
         el("div", { class: "album-subtitle", title: album.rel_path, text: shortenText(album.rel_path, 44) }),
       ]);
       shell.append(openBtn);
@@ -1941,7 +2009,9 @@ function renderThumbGrid(items, { onFileOps } = {}) {
     { class: "thumbs-grid" },
     items.map((item, i) => {
       const name = basename(item.rel_path) || item.rel_path;
-      const thumb = createLazyThumb({ src: API.thumb(item.rel_path), alt: name });
+      const ext = item.ext ? String(item.ext) : "";
+      const placeholder = ext && ext.startsWith(".") ? ext.slice(1).toUpperCase() : ext ? ext.toUpperCase() : "IMG";
+      const thumb = createLazyThumb({ src: API.thumb(item.rel_path), alt: name, placeholder });
       const caption = el("div", { class: "thumb-caption", title: item.rel_path, text: shortenText(name, 28) });
       const shell = el("div", { class: "media-shell" }, []);
       const openBtn = el("button", { class: "thumb-tile", type: "button", "data-index": String(i) }, [thumb.frame, caption]);
@@ -2077,6 +2147,7 @@ function renderCategory(category, token) {
 	let requestEpoch = 0;
 	const load = async ({ refresh = false } = {}) => {
 	  const req = (requestEpoch += 1);
+    const depsPromise = ensureRuntimeDeps();
 
     metaHost.replaceChildren(
       renderMetaBar({
@@ -2095,10 +2166,13 @@ function renderCategory(category, token) {
 	      if (category.key === "images") {
 	        const data = await fetchJson(`${API.albums}${refreshParam}`);
 	        if (token !== renderEpoch || req !== requestEpoch) return;
+          const deps = await depsPromise;
+          const depBadges = buildDepBadges(deps, category.key);
 	        const albums = Array.isArray(data.items) ? data.items : [];
         metaHost.replaceChildren(
           renderMetaBar({
             badges: [
+              ...depBadges,
               { label: "Albums", value: String(albums.length) },
               { label: "Scanned", value: formatDateTime(data.scanned_at_ms) },
               { label: "MediaRoot", value: shortenText(data.media_root, 44), title: data.media_root },
@@ -2137,10 +2211,13 @@ function renderCategory(category, token) {
 	      if (category.key === "scattered") {
 	        const data = await fetchJson(`${API.scattered}${refreshParam}`);
 	        if (token !== renderEpoch || req !== requestEpoch) return;
+          const deps = await depsPromise;
+          const depBadges = buildDepBadges(deps, category.key);
 	        const items = Array.isArray(data.items) ? data.items : [];
         metaHost.replaceChildren(
           renderMetaBar({
             badges: [
+              ...depBadges,
               { label: "Images", value: String(items.length) },
               { label: "Scanned", value: formatDateTime(data.scanned_at_ms) },
               { label: "MediaRoot", value: shortenText(data.media_root, 44), title: data.media_root },
@@ -2183,10 +2260,13 @@ function renderCategory(category, token) {
 	      if (category.key === "videos") {
 	        const data = await fetchJson(`${API.videos}${refreshParam}`);
 	        if (token !== renderEpoch || req !== requestEpoch) return;
+          const deps = await depsPromise;
+          const depBadges = buildDepBadges(deps, category.key);
 	        const items = Array.isArray(data.items) ? data.items : [];
         metaHost.replaceChildren(
           renderMetaBar({
             badges: [
+              ...depBadges,
               { label: "Videos", value: String(items.length) },
               { label: "Scanned", value: formatDateTime(data.scanned_at_ms) },
               { label: "MediaRoot", value: shortenText(data.media_root, 44), title: data.media_root },

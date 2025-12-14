@@ -75,11 +75,64 @@ if (-not $pythonCmd) {
 
 $pythonExe = $pythonCmd.Source
 
-$pyArgs = @()
+
+# --- Python venv + dependencies (Pillow) ---
+$pyBaseArgs = @()
 if ($usePyLauncher) {
-    $pyArgs += '-3'
+    $pyBaseArgs += '-3'
 }
-$pyArgs += @('-m', 'backend.api', '--config', $ConfigPath, '--media-root', $mediaRootFull)
+
+$venvDir = Join-Path $RepoRoot '.venv'
+$venvPython = Join-Path $venvDir 'Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $venvPython)) {
+    Write-Host ('准备 Python 虚拟环境：' + $venvDir)
+    & $pythonExe @pyBaseArgs -m venv $venvDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ('[ERROR] 创建虚拟环境失败（exit code=' + $LASTEXITCODE + '）。')
+        exit 16
+    }
+}
+
+$pythonExe = $venvPython
+$requirementsPath = Join-Path $RepoRoot 'backend\requirements.txt'
+$requirementsHashPath = Join-Path $venvDir '.ppm-requirements.sha256'
+if (Test-Path -LiteralPath $requirementsPath) {
+    $reqHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $requirementsPath).Hash.ToLowerInvariant()
+    $prevHash = ''
+    if (Test-Path -LiteralPath $requirementsHashPath) {
+        try {
+            $prevHash = (Get-Content -LiteralPath $requirementsHashPath -Raw).Trim().ToLowerInvariant()
+        } catch {
+            $prevHash = ''
+        }
+    }
+
+    if ($prevHash -ne $reqHash) {
+        Write-Host '安装/更新 Python 依赖（首次运行可能需要几分钟）...'
+        & $pythonExe -m pip install --upgrade pip
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ('[ERROR] pip 升级失败（exit code=' + $LASTEXITCODE + '）。')
+            exit 17
+        }
+        & $pythonExe -m pip install -r $requirementsPath
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ('[ERROR] 依赖安装失败（exit code=' + $LASTEXITCODE + '）。')
+            Write-Host ('请手动执行：' + $pythonExe + ' -m pip install -r ' + $requirementsPath)
+            exit 18
+        }
+        Set-Content -LiteralPath $requirementsHashPath -Value $reqHash -NoNewline -Encoding ASCII
+    }
+} else {
+    Write-Host ('[WARN] 未找到 requirements.txt：' + $requirementsPath)
+}
+
+$ffmpegCmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
+if (-not $ffmpegCmd) {
+    Write-Host '[WARN] 未找到 ffmpeg：视频 2×2 预览缩略图将不可用。'
+    Write-Host '       你仍然可以浏览/播放视频；如需缩略图，请安装 ffmpeg 并加入 PATH。'
+}
+
+$pyArgs = @('-m', 'backend.api', '--config', $ConfigPath, '--media-root', $mediaRootFull)
 if (-not [string]::IsNullOrWhiteSpace($bindHost)) {
     $pyArgs += @('--host', $bindHost)
 }
