@@ -1056,6 +1056,64 @@ function createVideoOverlay() {
   panel.append(header, viewer);
   root.append(backdrop, panel);
 
+  function clamp01(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return Math.min(1, Math.max(0, n));
+  }
+
+  function loadSavedVolume() {
+    try {
+      const raw = localStorage.getItem("ppm.video.volume");
+      if (raw === null) return null;
+      return clamp01(Number.parseFloat(raw));
+    } catch {
+      return null;
+    }
+  }
+
+  function loadSavedMuted() {
+    try {
+      const raw = localStorage.getItem("ppm.video.muted");
+      if (raw === null) return null;
+      return raw === "1" || raw === "true";
+    } catch {
+      return null;
+    }
+  }
+
+  function restoreVolumePrefs() {
+    const savedMuted = loadSavedMuted();
+    const savedVolume = loadSavedVolume();
+
+    if (savedMuted !== null) {
+      try {
+        video.muted = savedMuted;
+      } catch {
+        // ignore
+      }
+    }
+    if (savedVolume !== null) {
+      try {
+        video.volume = savedVolume;
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  function persistVolumePrefs() {
+    try {
+      localStorage.setItem("ppm.video.volume", String(video.volume));
+      localStorage.setItem("ppm.video.muted", video.muted ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }
+
+  restoreVolumePrefs();
+  video.addEventListener("volumechange", () => persistVolumePrefs());
+
   let requestEpoch = 0;
   let isOpen = false;
   let items = [];
@@ -2422,3 +2480,4 @@ document.addEventListener("click", (event) => {
 });
 
 render();
+
