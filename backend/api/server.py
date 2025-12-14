@@ -153,6 +153,18 @@ class _Handler(BaseHTTPRequestHandler):
     server: _MediaApiServer
 
     def _guess_content_type(self, file_path: Path) -> str:
+        ext = file_path.suffix.lower()
+        if ext in {".js", ".mjs"}:
+            return "text/javascript; charset=utf-8"
+        if ext == ".css":
+            return "text/css; charset=utf-8"
+        if ext in {".html", ".htm"}:
+            return "text/html; charset=utf-8"
+        if ext == ".json":
+            return "application/json; charset=utf-8"
+        if ext == ".svg":
+            return "image/svg+xml"
+
         content_type, _encoding = mimetypes.guess_type(str(file_path))
         if content_type is None:
             return "application/octet-stream"
@@ -718,7 +730,7 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        if path not in {"/api/delete", "/api/move", "/api/thumbs/warm"}:
+        if path not in {"/api/delete", "/api/move", "/api/thumbs/warm", "/api/trash/restore", "/api/trash/empty"}:
             self._send_error(404, "NOT_FOUND", f"unknown endpoint: {path}")
             return
 
@@ -740,6 +752,10 @@ class _Handler(BaseHTTPRequestHandler):
 
             if path == "/api/delete":
                 result = self.server.fileops.delete(body)
+            elif path == "/api/trash/restore":
+                result = self.server.fileops.trash_restore(body)
+            elif path == "/api/trash/empty":
+                result = self.server.fileops.trash_empty(body)
             else:
                 result = self.server.fileops.move(body)
         except FileOpsError as exc:

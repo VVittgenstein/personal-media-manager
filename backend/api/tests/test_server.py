@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from base64 import b64decode
 from http.client import HTTPConnection
@@ -457,17 +458,154 @@ class TestApiServer(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertTrue(deleted.get("executed"))
                 self.assertFalse((root / "moved" / "a.txt").exists())
+                trashed_rel = deleted.get("dst_rel_path")
+                self.assertIsInstance(trashed_rel, str)
+                self.assertTrue((root / Path(trashed_rel)).exists())
 
                 lines = log_path.read_text(encoding="utf-8").strip().splitlines()
                 self.assertGreaterEqual(len(lines), 2)
                 last = json.loads(lines[-1])
-                self.assertEqual(last.get("op"), "delete")
+                self.assertEqual(last.get("op"), "archive")
                 self.assertTrue(last.get("success"))
             finally:
                 conn.close()
                 server.shutdown()
                 server.server_close()
                 t.join(timeout=2)
+
+    def test_trash_restore_and_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "MediaRoot"
+            root.mkdir(parents=True)
+            (root / "a.txt").write_text("hello", encoding="utf-8")
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            log_path = tmp_path / "operation-log.jsonl"
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+            server.fileops = FileOpsService(
+                media_root=root,
+                log_store=OperationLogStore(path=log_path),
+                confirm_secret=b"test-secret",
+            )
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=2)
+
+            try:
+                status, del_preview = self._post_json(conn, "/api/delete", {"path": "a.txt"})
+                self.assertEqual(status, 200)
+                del_token = del_preview.get("confirm_token")
+                self.assertIsInstance(del_token, str)
+
+                status, deleted = self._post_json(
+                    conn,
+                    "/api/delete",
+                    {"path": "a.txt", "confirm": True, "confirm_token": del_token},
+                )
+                self.assertEqual(status, 200)
+                self.assertTrue(deleted.get("executed"))
+                trashed_rel = deleted.get("dst_rel_path")
+                self.assertIsInstance(trashed_rel, str)
+                self.assertFalse((root / "a.txt").exists())
+                self.assertTrue((root / Path(trashed_rel)).exists())
+
+                status, restore_preview = self._post_json(conn, "/api/trash/restore", {"path": trashed_rel})
+                self.assertEqual(status, 200)
+                restore_token = restore_preview.get("confirm_token")
+                self.assertIsInstance(restore_token, str)
+
+                status, restored = self._post_json(
+                    conn,
+                    "/api/trash/restore",
+                    {"path": trashed_rel, "confirm": True, "confirm_token": restore_token},
+                )
+                self.assertEqual(status, 200)
+                self.assertTrue(restored.get("executed"))
+                self.assertTrue((root / "a.txt").exists())
+                self.assertFalse((root / Path(trashed_rel)).exists())
+
+                status, del_preview_2 = self._post_json(conn, "/api/delete", {"path": "a.txt"})
+                self.assertEqual(status, 200)
+                del_token_2 = del_preview_2.get("confirm_token")
+                self.assertIsInstance(del_token_2, str)
+
+                status, deleted_2 = self._post_json(
+                    conn,
+                    "/api/delete",
+                    {"path": "a.txt", "confirm": True, "confirm_token": del_token_2},
+                )
+                self.assertEqual(status, 200)
+                trashed_rel_2 = deleted_2.get("dst_rel_path")
+                self.assertIsInstance(trashed_rel_2, str)
+                self.assertTrue((root / Path(trashed_rel_2)).exists())
+
+                status, empty_preview = self._post_json(conn, "/api/trash/empty", {})
+                self.assertEqual(status, 200)
+                empty_token = empty_preview.get("confirm_token")
+                self.assertIsInstance(empty_token, str)
+
+                status, emptied = self._post_json(
+                    conn,
+                    "/api/trash/empty",
+                    {"confirm": True, "confirm_token": empty_token},
+                )
+                self.assertEqual(status, 200)
+                self.assertTrue(emptied.get("executed"))
+                self.assertFalse((root / Path(trashed_rel_2)).exists())
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
+    def test_trash_cleanup_purges_old_entries_on_startup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "MediaRoot"
+            root.mkdir(parents=True)
+
+            trash_entry = root / "_trash" / "old-token"
+            trash_entry.mkdir(parents=True)
+            (trash_entry / "payload.txt").write_text("stale", encoding="utf-8")
+            now_ms = int(time.time() * 1000)
+            eleven_days_ms = 11 * 24 * 60 * 60 * 1000
+            (trash_entry / "meta.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "archived_at_ms": now_ms - eleven_days_ms,
+                        "src_rel_path": "payload.txt",
+                        "dst_rel_path": "_trash/old-token/payload.txt",
+                        "payload_name": "payload.txt",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            log_path = tmp_path / "operation-log.jsonl"
+            _ = FileOpsService(
+                media_root=root,
+                log_store=OperationLogStore(path=log_path),
+                confirm_secret=b"test-secret",
+            )
+
+            self.assertFalse(trash_entry.exists())
+            lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+            self.assertGreaterEqual(len(lines), 1)
+            last = json.loads(lines[-1])
+            self.assertEqual(last.get("op"), "purge")
+            self.assertTrue(last.get("success"))
 
     def test_thumbnail_endpoint_generates_and_uses_etag(self) -> None:
         try:

@@ -17,7 +17,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" -RepoRoot "%RE
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
   echo.
-  echo [ERROR] 启动失败（exit code=%EXIT_CODE%）
+  echo [ERROR] Launch failed. exit code=%EXIT_CODE%
   pause
 )
 exit /b %EXIT_CODE%

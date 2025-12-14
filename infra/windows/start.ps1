@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$RepoRoot,
     [Parameter(Mandatory = $true)]
@@ -46,9 +46,9 @@ if (-not (Test-Path -LiteralPath $MediaRoot -PathType Container)) {
 
 $mediaRootFull = (Resolve-Path -LiteralPath $MediaRoot).Path
 
-$host = $cfg.host
-if ($null -ne $host) {
-    $host = $host.ToString().Trim()
+$bindHost = $cfg.host
+if ($null -ne $bindHost) {
+    $bindHost = $bindHost.ToString().Trim()
 }
 
 $port = $null
@@ -80,8 +80,8 @@ if ($usePyLauncher) {
     $pyArgs += '-3'
 }
 $pyArgs += @('-m', 'backend.api', '--config', $ConfigPath, '--media-root', $mediaRootFull)
-if (-not [string]::IsNullOrWhiteSpace($host)) {
-    $pyArgs += @('--host', $host)
+if (-not [string]::IsNullOrWhiteSpace($bindHost)) {
+    $pyArgs += @('--host', $bindHost)
 }
 if ($null -ne $port) {
     $pyArgs += @('--port', [string]$port)
@@ -91,8 +91,8 @@ $pyArgs += @('--port-conflict', 'auto')
 Write-Host ('RepoRoot:  ' + $RepoRoot)
 Write-Host ('Config:    ' + $ConfigPath)
 Write-Host ('MediaRoot: ' + $mediaRootFull)
-if (-not [string]::IsNullOrWhiteSpace($host)) {
-    Write-Host ('Host:      ' + $host)
+if (-not [string]::IsNullOrWhiteSpace($bindHost)) {
+    Write-Host ('Host:      ' + $bindHost)
 }
 if ($null -ne $port) {
     Write-Host ('Port:      ' + $port)
@@ -102,17 +102,23 @@ Write-Host '启动后端服务中...（首次成功启动会自动打开默认�
 Write-Host '停止服务：按 Ctrl+C 或直接关闭窗口。'
 
 $opened = $false
-& $pythonExe @pyArgs 2>&1 | ForEach-Object {
-    $line = $_.ToString()
-    Write-Host $line
-    if (-not $opened) {
-        $m = [regex]::Match($line, 'https?://\S+')
-        if ($m.Success) {
-            $url = $m.Value
-            Start-Process $url | Out-Null
-            $opened = $true
+$prevErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    & $pythonExe @pyArgs 2>&1 | ForEach-Object {
+        $line = $_.ToString()
+        Write-Host $line
+        if (-not $opened) {
+            $m = [regex]::Match($line, 'https?://\S+')
+            if ($m.Success) {
+                $url = $m.Value
+                Start-Process $url | Out-Null
+                $opened = $true
+            }
         }
     }
+} finally {
+    $ErrorActionPreference = $prevErrorActionPreference
 }
 
 $exitCode = $LASTEXITCODE

@@ -48,6 +48,10 @@
       </header>
 
       <main class="main" id="main" tabindex="-1">
+        <div class="card" id="boot-status" hidden>
+          <div class="card__title">Loading WebUI…</div>
+          <div class="card__desc" id="boot-status-detail">如果页面长期空白，请打开浏览器开发者工具（F12）查看 Console / Network。</div>
+        </div>
         <noscript>
           <div class="card">
             <div class="card__title">需要启用 JavaScript</div>
@@ -61,6 +65,55 @@
       </footer>
     </div>
 
-    <script type="module" src="/app.js"></script>
+    <script>
+      (function () {
+        var boot = document.getElementById("boot-status");
+        if (boot) boot.hidden = false;
+      })();
+    </script>
+    <script type="module">
+      const boot = document.getElementById("boot-status");
+      const bootDetail = document.getElementById("boot-status-detail");
+
+      const setBoot = (title, detail) => {
+        if (!boot) return;
+        const titleEl = boot.querySelector(".card__title");
+        if (titleEl) titleEl.textContent = String(title || "WebUI failed to start");
+        if (bootDetail) bootDetail.textContent = String(detail || "");
+      };
+
+      const showImportError = async (err) => {
+        let extra = "";
+        try {
+          const res = await fetch("/app.js", { cache: "no-store" });
+          const contentType = res.headers.get("Content-Type") || "";
+          const snippet = (await res.text()).slice(0, 140).replace(/\s+/g, " ");
+          extra = `app.js: HTTP ${res.status}, Content-Type=${contentType}, startsWith=${JSON.stringify(snippet)}`;
+        } catch (fetchErr) {
+          extra = `app.js fetch failed: ${fetchErr}`;
+        }
+
+        setBoot(
+          "WebUI 启动失败",
+          `${err}\n${extra}\n\n请把 Console 里的红色报错也复制给我。`,
+        );
+      };
+
+      import("/app.js")
+        .then(() => {
+          if (boot) boot.remove();
+        })
+        .catch((err) => showImportError(err));
+    </script>
+    <script nomodule>
+      (function () {
+        var boot = document.getElementById("boot-status");
+        var detail = document.getElementById("boot-status-detail");
+        if (boot) boot.hidden = false;
+        var titleEl = boot ? boot.querySelector(".card__title") : null;
+        if (titleEl) titleEl.textContent = "Browser too old";
+        if (detail) detail.textContent = "该 WebUI 需要支持 ES Modules 的现代浏览器（建议最新版 Chrome / Edge）。";
+      })();
+    </script>
   </body>
 </html>

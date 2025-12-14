@@ -1488,6 +1488,8 @@ function createFileOpsDialog() {
     const hints = {
       SANDBOX_VIOLATION: "路径越界：只能操作 MediaRoot 内的相对路径。",
       ROOT_FORBIDDEN: "禁止对 MediaRoot 根目录执行此操作。",
+      TRASH_ROOT_FORBIDDEN: "回收站根目录不能直接删除：请使用“清空回收站”功能。",
+      TRASH_ENTRY_EXISTS: "回收站目标已存在：请重新打开窗口获取最新确认信息。",
       DST_EXISTS: "目标已存在：请更换目标路径或先处理同名文件。",
       DST_PARENT_MISSING: "目标目录不存在：可勾选“Create parents”自动创建。",
       DST_PARENT_NOT_DIR: "目标父路径不是文件夹。",
@@ -1586,8 +1588,9 @@ function createFileOpsDialog() {
       confirmToken = typeof data?.confirm_token === "string" ? data.confirm_token : "";
 
       const parts = [
-        el("div", { class: "modal__text", text: "确认删除以下内容？删除后将无法恢复。" }),
+        el("div", { class: "modal__text", text: "确认删除以下内容？将移动到回收站（默认保留 10 天，可恢复）。" }),
         renderKv("Source", preview.src_rel_path ? String(preview.src_rel_path) : srcRelPath, { mono: true }),
+        ...(preview.dst_rel_path ? [renderKv("Trash", String(preview.dst_rel_path), { mono: true })] : []),
         renderKv("Type", preview.is_dir ? "Folder" : "File"),
       ];
       if (!preview.is_dir) {
@@ -1601,7 +1604,7 @@ function createFileOpsDialog() {
         if (!confirmToken) return;
         const execReq = (requestEpoch += 1);
         setBusy(true);
-        body.append(el("div", { class: "modal__hint", text: "Deleting…" }));
+        body.append(el("div", { class: "modal__hint", text: "Moving to trash…" }));
         try {
           await postJson(API.delete, { path: srcRelPath, confirm: true, confirm_token: confirmToken });
           if (!isOpen || execReq !== requestEpoch) return;
@@ -1764,13 +1767,13 @@ function createFileOpsDialog() {
     requestAnimationFrame(() => dstInput.focus({ preventScroll: true }));
   }
 
-  function normalizeRelPathLike(value) {
-    return String(value || "")
-      .trim()
-      .replace(/\\\\/g, "/")
-      .replace(/^\\/+/, "")
-      .replace(/\\/+$/, "");
-  }
+	  function normalizeRelPathLike(value) {
+	    return String(value || "")
+	      .trim()
+	      .replace(/\\/g, "/")
+	      .replace(/^\/+/, "")
+	      .replace(/\/+$/, "");
+	  }
 
   backdrop.addEventListener("click", () => close({ restoreScroll: true, restoreFocus: true }));
   closeBtn.addEventListener("click", () => close({ restoreScroll: true, restoreFocus: true }));
