@@ -9,6 +9,7 @@ import os
 import secrets
 import stat
 import threading
+import time
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,6 +18,7 @@ from urllib.parse import parse_qs, urlparse
 
 from backend.config.backend_config import load_backend_config
 from backend.indexing.media_index import MediaIndex, build_media_index
+from backend.indexing.search import normalize_search_query, parse_search_types, search_media_index
 from backend.indexing.media_types import MediaTypes, load_media_types
 from backend.scanner.sandbox import MediaRootSandbox, SandboxViolation, normalize_rel_path
 from backend.security.fileops import FileOpsError, FileOpsService
@@ -277,13 +279,63 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True})
             return
 
-        if path in {"/api/albums", "/api/scattered", "/api/videos", "/api/others"}:
+        if path in {"/api/albums", "/api/scattered", "/api/videos", "/api/others", "/api/search"}:
             try:
                 index = self.server.index_cache.get(refresh=refresh)
             except Exception as exc:
                 logger.exception("failed to build index: %s", exc)
                 self._send_error(500, "INDEX_BUILD_FAILED", str(exc))
                 return
+
+        if path == "/api/search":
+            raw_query = query.get("q", [""])[0]
+            if not isinstance(raw_query, str) or not raw_query.strip():
+                self._send_error(400, "INVALID_REQUEST", "missing or invalid 'q' query parameter")
+                return
+
+            normalized_query = normalize_search_query(raw_query)
+            if not normalized_query:
+                self._send_error(400, "INVALID_REQUEST", "missing or invalid 'q' query parameter")
+                return
+            if len(normalized_query) > 200:
+                self._send_error(400, "INVALID_REQUEST", "query too long (max 200 chars)")
+                return
+
+            raw_limit = query.get("limit", ["50"])[0]
+            try:
+                limit = int(raw_limit)
+            except (TypeError, ValueError):
+                self._send_error(400, "INVALID_REQUEST", "invalid 'limit' query parameter")
+                return
+            if limit <= 0 or limit > 200:
+                self._send_error(400, "INVALID_REQUEST", "limit must be between 1 and 200")
+                return
+
+            raw_types = query.get("types", [None])[0]
+            try:
+                types = parse_search_types(raw_types)
+            except (TypeError, ValueError) as exc:
+                self._send_error(400, "INVALID_REQUEST", str(exc))
+                return
+
+            t0 = time.perf_counter()
+            items = search_media_index(index, normalized_query, limit=limit, types=types)
+            took_ms = int((time.perf_counter() - t0) * 1000)
+
+            self._send_json(
+                200,
+                {
+                    "media_root": index.media_root,
+                    "scanned_at_ms": index.scanned_at_ms,
+                    "query": normalized_query,
+                    "limit": limit,
+                    "types": sorted(types),
+                    "count": len(items),
+                    "took_ms": took_ms,
+                    "items": items,
+                },
+            )
+            return
 
         if path == "/api/albums":
             self._send_json(

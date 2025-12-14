@@ -85,6 +85,47 @@ class TestApiServer(unittest.TestCase):
                 others = json.loads(resp.read().decode("utf-8"))
                 self.assertIn("games", others)
                 self.assertIn("others", others)
+
+                conn.request("GET", "/api/search?q=album")
+                resp = conn.getresponse()
+                self.assertEqual(resp.status, 200)
+                search = json.loads(resp.read().decode("utf-8"))
+                self.assertIn("items", search)
+                self.assertIn("count", search)
+                self.assertIn("took_ms", search)
+                self.assertTrue(any(item.get("kind") == "album" for item in search["items"]))
+            finally:
+                conn.close()
+                server.shutdown()
+                server.server_close()
+                t.join(timeout=2)
+
+    def test_search_rejects_missing_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "MediaRoot"
+            root.mkdir(parents=True)
+
+            cache = _IndexCache(
+                media_root=root,
+                media_types=MediaTypes.defaults(),
+                include_trash=False,
+            )
+
+            server: _MediaApiServer = _MediaApiServer(("127.0.0.1", 0), _Handler)
+            server.index_cache = cache
+
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=2)
+
+            try:
+                conn.request("GET", "/api/search")
+                resp = conn.getresponse()
+                self.assertEqual(resp.status, 400)
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(data["error"]["code"], "INVALID_REQUEST")
             finally:
                 conn.close()
                 server.shutdown()

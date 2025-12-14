@@ -788,7 +788,7 @@
       ],
       "lane": "next",
       "priority_suggested": "P1",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251212-act-001-classify-api"
       ],
@@ -801,13 +801,19 @@
         "backend/indexing"
       ],
       "artifacts": [
-        "/api/search"
+        "/api/search",
+        "backend/indexing/search.py",
+        "backend/indexing/media_index.py",
+        "backend/api/server.py",
+        "backend/api/tests/test_server.py",
+        "backend/indexing/tests/test_search.py",
+        "Compact/Compact-T-20251212-act-008-search-api-2025-12-14-T043310Z.md"
       ],
       "citations": [
         "EVID-002"
       ],
       "created_at": "2025-12-12T00:00:00Z",
-      "updated_at": "2025-12-12T00:00:00Z",
+      "updated_at": "2025-12-14T04:33:10Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-008",

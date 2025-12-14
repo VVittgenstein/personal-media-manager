@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +72,16 @@ class MediaFile:
 
 
 @dataclass
+class ImageFile(MediaFile):
+    album_rel_path: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        base = super().as_dict()
+        base["album_rel_path"] = self.album_rel_path
+        return base
+
+
+@dataclass
 class OtherFile(MediaFile):
     category: str  # "game" | "other"
 
@@ -91,6 +101,7 @@ class MediaIndex:
     games: list[OtherFile]
     others: list[OtherFile]
     stats: dict[str, int]
+    images: list[ImageFile] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -230,6 +241,7 @@ def classify_inventory(inventory: InventoryResult, *, media_types: MediaTypes) -
         )
 
     album_rels = set(albums_by_rel.keys())
+    image_files: list[ImageFile] = []
     scattered: list[MediaFile] = []
     for img in images:
         current = img.folder_rel_path
@@ -243,10 +255,22 @@ def classify_inventory(inventory: InventoryResult, *, media_types: MediaTypes) -
                 break
             current = parent
 
+        image_files.append(
+            ImageFile(
+                rel_path=img.rel_path,
+                folder_rel_path=img.folder_rel_path,
+                ext=img.ext,
+                size_bytes=img.size_bytes,
+                mtime_ms=img.mtime_ms,
+                album_rel_path=owning_album,
+            )
+        )
+
         if owning_album is None:
             scattered.append(img)
 
     albums = [albums_by_rel[k] for k in sorted(albums_by_rel.keys())]
+    image_files.sort(key=lambda f: f.rel_path)
     scattered.sort(key=lambda f: f.rel_path)
     videos.sort(key=lambda f: f.rel_path)
     games.sort(key=lambda f: f.rel_path)
@@ -261,6 +285,7 @@ def classify_inventory(inventory: InventoryResult, *, media_types: MediaTypes) -
         games=games,
         others=others,
         stats=dict(inventory.stats),
+        images=image_files,
     )
 
 
