@@ -1,4 +1,4 @@
-"""Backend package for personal-pron-media-manager.
+"""Backend package for personal-media-manager.
 
 This repo is currently a spec-first project; backend modules are added incrementally.
 """

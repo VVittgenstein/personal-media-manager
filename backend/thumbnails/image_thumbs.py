@@ -55,12 +55,12 @@ def default_thumb_cache_dir() -> Path:
     if os.name == "nt":
         root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         if root:
-            return Path(root) / "personal-pron-media-manager" / "cache" / "thumbs"
+            return Path(root) / "personal-media-manager" / "cache" / "thumbs"
 
     root = os.environ.get("XDG_CACHE_HOME")
     if root:
-        return Path(root) / "personal-pron-media-manager" / "thumbs"
-    return Path.home() / ".cache" / "personal-pron-media-manager" / "thumbs"
+        return Path(root) / "personal-media-manager" / "thumbs"
+    return Path.home() / ".cache" / "personal-media-manager" / "thumbs"
 
 
 class ThumbnailService:

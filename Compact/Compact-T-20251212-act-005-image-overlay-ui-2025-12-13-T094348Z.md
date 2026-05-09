@@ -48,7 +48,7 @@
       "confidence_score": 0.49,
       "priority": 2,
       "code_location": {
-        "absolute_file_path": "/mnt/z/Project/personal-pron-media-manager/backend/api/server.py",
+        "absolute_file_path": "/mnt/z/Project/personal-media-manager/backend/api/server.py",
         "line_range": {
           "start": 276,
           "end": 280
@@ -78,7 +78,7 @@
       "confidence_score": 0.42,
       "priority": 1,
       "code_location": {
-        "absolute_file_path": "/mnt/z/Project/personal-pron-media-manager/backend/api/server.py",
+        "absolute_file_path": "/mnt/z/Project/personal-media-manager/backend/api/server.py",
         "line_range": {
           "start": 283,
           "end": 294

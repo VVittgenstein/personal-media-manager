@@ -1,5 +1,13 @@
-# personal-pron-media-manager
-A local Windows WebUI for managing personal media libraries. Features responsive layout, album organization, flat video views, and safe file management tools.
+# personal-media-manager
+
+A local Windows WebUI for browsing, searching, and safely organizing personal media libraries.
+
+## Technical highlights
+
+- Python backend using the standard library HTTP server plus Pillow/FFmpeg integrations for thumbnails, album covers, and video mosaics.
+- Vanilla JavaScript single-page UI for albums, scattered files, videos, search, overlays, and local file operations.
+- MediaRoot sandboxing, two-step confirmation, HMAC-backed confirm tokens, soft delete/archive operations, and JSONL operation logging.
+- Designed for local-first use: no cloud account, no remote upload, and no external media indexing service.
 
 ## Backend (dev)
 
