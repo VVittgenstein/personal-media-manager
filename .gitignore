@@ -9,3 +9,11 @@ config/backend.json
 backend/data/*.jsonl
 backend/data/deobf-cache/
 backend/data/deobf-job.json
+
+# Local project-management / agent artifacts
+Compact/
+Progress/
+Webui-dr/
+record.json
+read_only.md
+project_overview.md
